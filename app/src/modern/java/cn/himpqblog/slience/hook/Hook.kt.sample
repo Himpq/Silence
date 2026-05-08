@@ -1,0 +1,19 @@
+package cn.himpqblog.slience.hook
+
+/*
+ * Rename this file to Hook.kt after you have a valid libxposed API artifact
+ * in mavenLocal() and have enabled:
+ *
+ *   enableModernLsposed=true
+ *
+ * Recommended compatibility strategy for API 100 and 101:
+ * - module.prop:
+ *     minApiVersion=100
+ *     targetApiVersion=101
+ * - Only use the common subset that exists in both.
+ * - Do not depend on helper/service unless you also provide those artifacts.
+ * - Avoid API-101-only conveniences until you confirm them in the exact jar.
+ *
+ * Read:
+ * https://github.com/LSPosed/LSPosed/wiki/Develop-Xposed-Modules-Using-Modern-Xposed-API
+ */

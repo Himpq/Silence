@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Silence</string>
+    <string name="xposed_description">Silence root utility and LSPosed module</string>
+
+    <string name="nav_home">&#20027;&#39029;</string>
+    <string name="nav_process">&#36827;&#31243;</string>
+    <string name="nav_logs">&#26085;&#24535;</string>
+    <string name="nav_features">&#35774;&#32622;</string>
+
+    <string name="page_home">&#20027;&#39029;</string>
+    <string name="page_process">&#36827;&#31243;</string>
+    <string name="page_logs">&#26085;&#24535;</string>
+    <string name="page_features">&#35774;&#32622;</string>
+
+    <string name="action_clear_logs">&#28165;&#31354;&#26085;&#24535;</string>
+    <string name="action_copy_logs">&#22797;&#21046;&#20840;&#37096;</string>
+
+    <string name="home_title">Silence</string>
+    <string name="home_context">&#24403;&#21069;&#29256;&#26412;: v2.1</string>
+    <string name="home_hook_status_title">Hook Status</string>
+    <string name="module_state_waiting">Waiting for LSPosed to load in system_server</string>
+    <string name="module_state_checking">Checking LSPosed runtime logs...</string>
+
+    <string name="process_root_request">&#35831;&#27714; Root</string>
+    <string name="process_refreshing">&#27491;&#22312;&#21047;&#26032;&#36827;&#31243;&#21015;&#34920;...</string>
+    <string name="process_root_missing">Root &#26410;&#25480;&#26435;&#65292;&#26080;&#27861;&#35835;&#21462;&#36827;&#31243;&#25968;&#25454;</string>
+    <string name="process_empty">&#24403;&#21069;&#27809;&#26377;&#21487;&#26174;&#31034;&#30340;&#24212;&#29992;&#36827;&#31243;</string>
+    <string name="process_root_granted">Root &#24050;&#25480;&#26435;</string>
+    <string name="process_status_summary">Root &#24050;&#25480;&#26435; - %1$d &#20010;&#24212;&#29992; - %2$d &#20010;&#36827;&#31243;</string>
+    <string name="process_frozen_line">%1$d &#20010;&#36827;&#31243; %2$s %3$d</string>
+    <string name="process_state_frozen">&#24050;&#20923;&#32467;</string>
+    <string name="process_state_running">&#26410;&#20923;&#32467;</string>
+    <string name="process_memory_label">&#20869;&#23384; %1$s</string>
+    <string name="process_cpu_label">CPU %1$s</string>
+    <string name="process_freeze_mode_placeholder">V2</string>
+    <string name="process_freeze_mode_system">&#31995;&#32479;V2</string>
+    <string name="process_no_subprocess">main</string>
+    <string name="process_detail_package">&#21253;&#21517;</string>
+    <string name="process_detail_uid">UID</string>
+    <string name="process_detail_count">&#36827;&#31243;&#25968;</string>
+    <string name="process_detail_children">&#23376;&#36827;&#31243;</string>
+    <string name="process_detail_memory">&#20869;&#23384;</string>
+    <string name="process_detail_cpu">CPU</string>
+    <string name="process_detail_freeze">&#20923;&#32467;&#29366;&#24577;</string>
+    <string name="process_detail_freeze_targets">&#20923;&#32467;&#36827;&#31243;</string>
+    <string name="process_detail_conditions">&#19981;&#20923;&#32467;&#26465;&#20214;</string>
+    <string name="process_item_dialog_action">&#35814;&#32454;&#35774;&#32622;(&#21344;&#20301;)</string>
+    <string name="process_action_freeze">&#20923;&#32467;</string>
+    <string name="process_action_unfreeze">&#35299;&#20923;</string>
+    <string name="process_action_whitelist">&#30333;&#21517;&#21333;</string>
+    <string name="process_whitelist_enabled">&#24050;&#21152;&#20837;&#30333;&#21517;&#21333;</string>
+    <string name="process_whitelist_disabled">&#24050;&#31227;&#20986;&#30333;&#21517;&#21333;</string>
+    <string name="process_state_whitelist">&#30333;&#21517;&#21333;</string>
+    <string name="process_action_save">&#20445;&#23384;&#35268;&#21017;</string>
+    <string name="process_toggle_success">&#20923;&#32467;&#29366;&#24577;&#24050;&#26356;&#26032;</string>
+    <string name="process_toggle_failed">&#20923;&#32467;&#29366;&#24577;&#20999;&#25442;&#22833;&#36133;</string>
+    <string name="process_rule_saved">&#20923;&#32467;&#35268;&#21017;&#24050;&#20445;&#23384;</string>
+    <string name="process_rule_preview_placeholder">&#35268;&#21017;&#39044;&#35272;&#21344;&#20301;: %1$s</string>
+    <string name="process_rule_preview_loading">&#27491;&#22312;&#26816;&#26597;&#36827;&#31243;&#29366;&#24577;...</string>
+    <string name="process_state_audio">&#25773;&#25918;&#20013;</string>
+    <string name="process_state_network">&#20351;&#29992;&#32593;&#32476;&#20013;</string>
+    <string name="process_state_visible">&#21069;&#21488;&#21487;&#35265;</string>
+    <string name="process_state_idle">&#24403;&#21069;&#26080;&#27963;&#21160;&#29366;&#24577;</string>
+    <string name="process_state_cache_empty">&#26242;&#26080;&#29366;&#24577;&#32531;&#23384;</string>
+    <string name="process_item_dialog_message">&#21253;&#21517;: %1$s
+
+&#36827;&#31243;&#25968;: %2$d
+&#23376;&#36827;&#31243;: %3$s
+&#20869;&#23384;: %4$s
+CPU: %5$s
+&#20923;&#32467;&#26041;&#24335;: %6$s
+
+&#36825;&#37324;&#21518;&#32493;&#20250;&#25918;&#36825;&#20010;&#24212;&#29992;&#30340;&#20923;&#32467;&#35268;&#21017;&#21644;&#35814;&#32454;&#35774;&#32622;&#12290;</string>
+
+    <string name="logs_empty_hint">&#26242;&#26080;&#26085;&#24535;&#65292;&#31561;&#24453; Hook &#25110;&#36827;&#31243;&#35843;&#35797;&#20107;&#20214;&#35302;&#21457;&#12290;</string>
+    <string name="logs_copied">&#26085;&#24535;&#24050;&#22797;&#21046;&#21040;&#21098;&#36148;&#26495;</string>
+    <string name="logs_copy_empty">&#24403;&#21069;&#27809;&#26377;&#21487;&#22797;&#21046;&#30340;&#26085;&#24535;</string>
+    <string name="logs_record_mode">&#26085;&#24535;&#35760;&#24405;</string>
+    <string name="logs_mode_error">ERROR</string>
+    <string name="logs_mode_log">LOG</string>
+    <string name="logs_mode_all">ALL</string>
+    <string name="settings_sort_title">&#36827;&#31243;&#25490;&#24207;</string>
+    <string name="settings_sort_summary">&#20923;&#32467;&#30340;&#24212;&#29992;&#24635;&#26159;&#20248;&#20808;&#26174;&#31034;&#22312;&#39030;&#37096;&#65292;&#20854;&#20313;&#25353;&#19979;&#38754;&#30340;&#26041;&#24335;&#25490;&#24207;&#12290;</string>
+    <string name="settings_sort_cpu">CPU</string>
+    <string name="settings_sort_memory">&#20869;&#23384;</string>
+    <string name="settings_state_poll_title">&#24212;&#29992;&#29366;&#24577;&#36718;&#35810;</string>
+    <string name="settings_state_poll_summary">&#40664;&#35748; 15 &#31186;&#12290;&#21482;&#36718;&#35810;&#36827;&#31243;&#21015;&#34920;&#20013;&#30340;&#26410;&#20923;&#32467;&#24212;&#29992;&#65292;&#29992;&#20110;&#32531;&#23384; AUDIO / NETWORK / VISIBLE &#29366;&#24577;&#12290;</string>
+    <string name="settings_process_refresh_hint">&#36827;&#31243;&#21047;&#26032;&#38388;&#38548;&#65288;&#31186;&#65289;</string>
+    <string name="settings_state_poll_hint">&#36718;&#35810;&#38388;&#38548;&#65288;&#31186;&#65289;</string>
+    <string name="settings_hook_poll_hint">Hook&#36718;&#35810;&#38388;&#38548;&#65288;&#31186;&#65289;</string>
+</resources>

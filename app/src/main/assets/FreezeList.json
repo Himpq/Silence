@@ -1,0 +1,26 @@
+{
+  "apps": {
+    "com.bilibili.app.in": {
+      "freeze_processes": [
+        "ijkservice",
+        "download"
+      ],
+      "dont_freeze_when": [
+        "AUDIO",
+        "NETWORK",
+        "FOREGROUND_SERVICE"
+      ]
+    },
+    "com.tencent.mobileqq": {
+      "freeze_processes": [
+        "tool",
+        "mini",
+        "peak"
+      ],
+      "dont_freeze_when": [
+        "VOIP",
+        "NOTIFICATION"
+      ]
+    }
+  }
+}

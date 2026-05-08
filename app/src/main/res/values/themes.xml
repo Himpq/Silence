@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Slience" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/brand_primary</item>
+        <item name="colorSecondary">@color/brand_primary</item>
+        <item name="android:statusBarColor">@color/surface_bg</item>
+        <item name="android:navigationBarColor">@color/surface_bg</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:windowBackground">@color/surface_bg</item>
+        <item name="colorSurface">@color/surface_bg</item>
+        <item name="android:windowAllowEnterTransitionOverlap">true</item>
+        <item name="android:windowAllowReturnTransitionOverlap">true</item>
+    </style>
+</resources>

@@ -1,0 +1,12 @@
+*.iml
+.gradle/
+.idea/
+local.properties
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+app/build/
+.gradle-user
+gradle
+LSPOSED_MODERN_API.md
