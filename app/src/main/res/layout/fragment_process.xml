@@ -42,7 +42,19 @@
                 style="@style/Widget.Material3.Button"
                 android:layout_width="wrap_content"
                 android:layout_height="36dp"
+                android:layout_marginEnd="8dp"
                 android:text="@string/process_root_request"
+                android:textAllCaps="false"
+                android:textSize="12sp"
+                app:backgroundTint="@color/brand_primary_dim"
+                app:cornerRadius="10dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/forcePollButton"
+                style="@style/Widget.Material3.Button"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:text="@string/process_force_poll"
                 android:textAllCaps="false"
                 android:textSize="12sp"
                 app:backgroundTint="@color/brand_primary_dim"

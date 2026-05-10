@@ -10,16 +10,16 @@ data class HookRuntimeStatus(
 object HookRuntime {
 
     private const val BRIDGE_PREFIX = "LSPosed-Bridge"
-    private const val TAG = "SlienceHook"
+    private const val TAG = "SilenceHook"
     private const val MODULE_PACKAGE = "cn.himpqblog.slience"
     private const val SILENCE_HOOK_MARKER = "Silence|hook|"
-    private const val KW_BG = "\u8fdb\u5165\u540e\u53f0"
-    private const val KW_FREEZE = "\u51bb\u7ed3"
-    private const val KW_UNFREEZE = "\u89e3\u51bb"
+    private const val KW_BG = "进入后台"
+    private const val KW_FREEZE = "冻结"
+    private const val KW_UNFREEZE = "解冻"
 
     fun inspect(): HookRuntimeStatus {
         val result = Shell.cmd(
-            "logcat -d -s Silence:I SlienceHook:V LSPosed-Bridge:V LSPosed:V lspd:V 2>/dev/null"
+            "logcat -d -s Silence:I SilenceHook:V LSPosed-Bridge:V LSPosed:V lspd:V 2>/dev/null"
         ).exec()
 
         if (!result.isSuccess) {

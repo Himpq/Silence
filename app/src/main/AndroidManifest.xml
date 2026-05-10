@@ -4,12 +4,12 @@
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <application
-        android:name=".SlienceApp"
+        android:name=".SilenceApp"
         android:allowBackup="true"
         android:description="@string/xposed_description"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Slience">
+        android:theme="@style/Theme.Silence">
 
         <meta-data
             android:name="xposedmodule"
@@ -33,6 +33,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".ipc.FreezeCommandReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="cn.himpqblog.slience.action.FREEZE_COMMAND" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

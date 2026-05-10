@@ -26,14 +26,18 @@ import cn.himpqblog.slience.process.ProcessInspector
 import cn.himpqblog.slience.process.ProcessListAdapter
 import cn.himpqblog.slience.root.Permission
 import cn.himpqblog.slience.settings.SettingsStore
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.checkbox.MaterialCheckBox
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 class ProcessFragment : Fragment() {
+    companion object {
+        private const val SELF_PACKAGE = "cn.himpqblog.slience"
+    }
 
     private var _binding: FragmentProcessBinding? = null
     private val binding: FragmentProcessBinding
@@ -64,11 +68,11 @@ class ProcessFragment : Fragment() {
     private val pollRunnable = object : Runnable {
         override fun run() {
             refreshProcessList()
-            val context = context
-            val intervalMs = if (context == null) {
+            val ctx = context
+            val intervalMs = if (ctx == null) {
                 3000L
             } else {
-                SettingsStore.getProcessRefreshIntervalSeconds(context) * 1000L
+                SettingsStore.getProcessRefreshIntervalSeconds(ctx) * 1000L
             }
             mainHandler.postDelayed(this, intervalMs)
         }
@@ -100,6 +104,29 @@ class ProcessFragment : Fragment() {
                 }
             }
         }
+        binding.forcePollButton.setOnClickListener {
+            val ctx = context?.applicationContext ?: return@setOnClickListener
+            runCatching {
+                val token = "${System.currentTimeMillis()}-${UUID.randomUUID()}"
+                val written = FreezeListStore.writeForcePollTriggerToken(token)
+                RuntimeLogStore.appendDiagnostic(
+                    source = "process",
+                    message = "force poll trigger written token=$token write=$written",
+                    throttleKey = "force_poll_trigger_ui",
+                    throttleMs = 0L
+                )
+                Toast.makeText(ctx, "已触发后台轮询", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                RuntimeLogStore.appendDiagnostic(
+                    source = "process",
+                    message = "force poll trigger failed: ${it.message ?: it.javaClass.simpleName}",
+                    throttleKey = "force_poll_trigger_fail",
+                    throttleMs = 0L,
+                    category = RuntimeLogStore.LogCategory.ERROR
+                )
+                Toast.makeText(ctx, "触发失败", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     override fun onResume() {
@@ -129,8 +156,8 @@ class ProcessFragment : Fragment() {
 
         Thread {
             try {
-                val context = context?.applicationContext ?: return@Thread
-                val result = ProcessInspector.collect(context, lastSnapshot)
+                val ctx = context?.applicationContext ?: return@Thread
+                val result = ProcessInspector.collect(ctx, lastSnapshot)
                 lastSnapshot = result.snapshot ?: lastSnapshot
 
                 activity?.runOnUiThread {
@@ -163,24 +190,32 @@ class ProcessFragment : Fragment() {
     }
 
     private fun showProcessSettingsDialog(item: ProcessAppItem) {
-        val context = context ?: return
+        val ctx = context ?: return
         val dialogBinding = DialogProcessDetailBinding.inflate(layoutInflater)
-        val savedRule = FreezeListStore.loadRule(context, item.packageName)
-        var isWhitelist = savedRule?.isWhitelist == true
+        val savedRule = FreezeListStore.loadRule(ctx, item.packageName)
+        val isSelfPackage = item.packageName == SELF_PACKAGE
+        var isWhitelist = isSelfPackage || savedRule?.isWhitelist == true
         val targetOptions = buildTargetOptions(item)
         val targetBoxes = createTargetBoxes(
             container = dialogBinding.freezeTargetsContainer,
             options = targetOptions,
-            selected = savedRule?.freezeProcesses?.toSet().orEmpty().ifEmpty { setOf("ALL") }
+            selected = if (isSelfPackage) {
+                setOf("ALL")
+            } else {
+                savedRule?.freezeProcesses?.toSet().orEmpty().ifEmpty { setOf("ALL") }
+            }
         )
         val conditionBoxes = createConditionBoxes(
             container = dialogBinding.freezeConditionsContainer,
-            selected = savedRule?.dontFreezeWhen?.toSet().orEmpty()
+            selected = if (isSelfPackage) emptySet() else savedRule?.dontFreezeWhen?.toSet().orEmpty()
         )
         val childText = if (item.processEntries.isEmpty()) {
             getString(R.string.process_no_subprocess)
         } else {
-            item.processEntries.joinToString(", ") { "${it.displayName}(${it.pid})" }
+            item.processEntries.joinToString(", ") {
+                val frozenTag = if (it.isFrozen) "(已冻结)" else ""
+                "${it.displayName}(${it.pid})$frozenTag"
+            }
         }
         dialogBinding.packageValue.text = item.packageName
         dialogBinding.uidValue.text = item.uid.toString()
@@ -188,13 +223,29 @@ class ProcessFragment : Fragment() {
         dialogBinding.childrenValue.text = childText
         dialogBinding.memoryValue.text = formatBytes(item.memoryBytes)
         dialogBinding.cpuValue.text = String.format(Locale.US, "%.1f%%", item.cpuPercent)
-        dialogBinding.freezeValue.text = buildFreezeText(item.isFrozen, item.freezeMode, item.frozenProcessCount, item.processCount)
+        dialogBinding.freezeValue.text = buildFreezeText(
+            item.isFrozen,
+            item.freezeMode,
+            item.frozenProcessCount,
+            item.processCount
+        )
         dialogBinding.freezeToggleButton.text = getString(
             if (item.isFrozen) R.string.process_action_unfreeze else R.string.process_action_freeze
         )
         applyWhitelistButtonStyle(dialogBinding.whitelistToggleButton, isWhitelist)
+        if (isSelfPackage) {
+            targetBoxes.forEach {
+                it.isChecked = it.text.toString() == "ALL"
+                it.isEnabled = false
+            }
+            conditionBoxes.forEach {
+                it.isChecked = false
+                it.isEnabled = false
+            }
+            dialogBinding.whitelistToggleButton.isEnabled = false
+        }
 
-        val dialog = MaterialAlertDialogBuilder(context)
+        val dialog = MaterialAlertDialogBuilder(ctx)
             .setTitle(item.appName)
             .setView(dialogBinding.root)
             .setPositiveButton(R.string.process_action_save, null)
@@ -204,21 +255,25 @@ class ProcessFragment : Fragment() {
             val selectedTargets = readSelectedTargets(targetBoxes)
             val selectedConditions = readSelectedConditions(conditionBoxes)
             FreezeListStore.saveRule(
-                context = context,
+                context = ctx,
                 packageName = item.packageName,
                 freezeProcesses = selectedTargets,
                 dontFreezeWhen = selectedConditions,
                 isWhitelist = isWhitelist
             )
-            Toast.makeText(context, R.string.process_rule_saved, Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, R.string.process_rule_saved, Toast.LENGTH_SHORT).show()
             dialog.dismiss()
         }
         dialogBinding.whitelistToggleButton.setOnClickListener {
+            if (isSelfPackage) {
+                Toast.makeText(ctx, R.string.process_self_whitelist_fixed, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             isWhitelist = !isWhitelist
-            FreezeListStore.setWhitelist(context, item.packageName, isWhitelist)
+            FreezeListStore.setWhitelist(ctx, item.packageName, isWhitelist)
             applyWhitelistButtonStyle(dialogBinding.whitelistToggleButton, isWhitelist)
             Toast.makeText(
-                context,
+                ctx,
                 if (isWhitelist) R.string.process_whitelist_enabled else R.string.process_whitelist_disabled,
                 Toast.LENGTH_SHORT
             ).show()
@@ -227,10 +282,10 @@ class ProcessFragment : Fragment() {
             val selectedTargets = readSelectedTargets(targetBoxes).toSet()
             val success = ProcessInspector.toggleFreeze(item, selectedTargets)
             if (!success) {
-                Toast.makeText(context, R.string.process_toggle_failed, Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, R.string.process_toggle_failed, Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            Toast.makeText(context, R.string.process_toggle_success, Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, R.string.process_toggle_success, Toast.LENGTH_SHORT).show()
             dialog.dismiss()
             refreshProcessList()
         }
@@ -247,14 +302,15 @@ class ProcessFragment : Fragment() {
         }
         val modeText = when (freezeMode) {
             "V2" -> getString(R.string.process_freeze_mode_placeholder)
+            "SYSTEM_V2" -> getString(R.string.process_freeze_mode_system)
             else -> getString(R.string.process_freeze_mode_system)
         }
         return "$modeText / ${getString(R.string.process_state_frozen)} ($frozenProcessCount/$processCount)"
     }
 
     private fun showProcessRulePreview(item: ProcessAppItem) {
-        val context = context ?: return
-        val whitelistSuffix = if (FreezeListStore.loadRule(context, item.packageName)?.isWhitelist == true) {
+        val ctx = context ?: return
+        val whitelistSuffix = if (FreezeListStore.loadRule(ctx, item.packageName)?.isWhitelist == true) {
             " (${getString(R.string.process_state_whitelist)})"
         } else {
             ""
@@ -267,24 +323,24 @@ class ProcessFragment : Fragment() {
                 stateCache[item.packageName] = state
                 activity?.runOnUiThread {
                     if (_binding == null) return@runOnUiThread
-                    showStatePopup(item, buildStateText(context, state) + whitelistSuffix)
+                    showStatePopup(item, buildStateText(ctx, state) + whitelistSuffix)
                 }
             }.start()
             return
         }
-        showStatePopup(item, buildStateText(context, cached) + whitelistSuffix)
+        showStatePopup(item, buildStateText(ctx, cached) + whitelistSuffix)
     }
 
     private fun pollCachedStatesIfNeeded(items: List<ProcessAppItem>) {
-        val context = context?.applicationContext ?: return
+        val ctx = context?.applicationContext ?: return
         if (items.isEmpty()) return
-        val intervalMs = SettingsStore.getAppStatePollIntervalSeconds(context) * 1000L
+        val intervalMs = SettingsStore.getAppStatePollIntervalSeconds(ctx) * 1000L
         val now = SystemClock.elapsedRealtime()
         if (now - lastStatePollAt < intervalMs) return
         if (!statePolling.compareAndSet(false, true)) return
         lastStatePollAt = now
 
-        val freezeRuleTargets = items.filter { FreezeListStore.loadRule(context, it.packageName) != null }
+        val freezeRuleTargets = items.filter { FreezeListStore.loadRule(ctx, it.packageName) != null }
         val targets = (freezeRuleTargets + items.filterNot { it.isFrozen })
             .distinctBy { it.packageName }
         if (targets.isEmpty()) {
@@ -305,7 +361,7 @@ class ProcessFragment : Fragment() {
                     stateCache[item.packageName] = state
                     RuntimeLogStore.appendDiagnostic(
                         source = "state",
-                        message = "${item.packageName} ${buildStateText(context, state)}",
+                        message = "${item.packageName} ${buildStateText(ctx, state)}",
                         throttleKey = "state_poll_${item.packageName}",
                         throttleMs = 3000L,
                         category = RuntimeLogStore.LogCategory.ALL
@@ -348,12 +404,16 @@ class ProcessFragment : Fragment() {
     }
 
     private fun showStatePopup(item: ProcessAppItem, text: String) {
-        val activity = activity ?: return
+        val hostActivity = activity ?: return
         val popupBinding = ViewStatePopupBinding.inflate(layoutInflater)
         popupBinding.statePopupIcon.setImageDrawable(
             item.icon ?: requireContext().packageManager.defaultActivityIcon
         )
-        popupBinding.statePopupTitle.text = item.appName
+        popupBinding.statePopupTitle.text = if (item.isFrozen) {
+            "${item.appName}(已冻结)"
+        } else {
+            item.appName
+        }
         popupBinding.statePopupMessage.text = text
 
         mainHandler.removeCallbacks(dismissStatePopupRunnable)
@@ -367,7 +427,7 @@ class ProcessFragment : Fragment() {
             isOutsideTouchable = false
             elevation = resources.displayMetrics.density * 12f
             showAtLocation(
-                activity.window.decorView,
+                hostActivity.window.decorView,
                 Gravity.TOP or Gravity.CENTER_HORIZONTAL,
                 0,
                 resources.getDimensionPixelSize(R.dimen.state_popup_offset_top)
@@ -445,21 +505,21 @@ class ProcessFragment : Fragment() {
     }
 
     private fun applyWhitelistButtonStyle(button: MaterialButton, enabled: Boolean) {
-        val context = button.context
+        val ctx = button.context
         button.text = getString(R.string.process_action_whitelist)
-        button.alpha = if (enabled) 1f else 1f
+        button.alpha = 1f
         if (enabled) {
-            button.setBackgroundColor(context.getColor(android.R.color.holo_green_dark))
-            button.setTextColor(context.getColor(android.R.color.white))
+            button.setBackgroundColor(ctx.getColor(android.R.color.holo_green_dark))
+            button.setTextColor(ctx.getColor(android.R.color.white))
         } else {
-            button.setBackgroundColor(context.getColor(android.R.color.transparent))
-            button.setTextColor(context.getColor(R.color.text_secondary))
+            button.setBackgroundColor(ctx.getColor(android.R.color.transparent))
+            button.setTextColor(ctx.getColor(R.color.text_secondary))
         }
     }
 
     private fun sortItems(items: List<ProcessAppItem>): List<ProcessAppItem> {
-        val context = context ?: return items
-        return when (SettingsStore.getProcessSortMode(context)) {
+        val ctx = context ?: return items
+        return when (SettingsStore.getProcessSortMode(ctx)) {
             SettingsStore.ProcessSortMode.MEMORY -> items.sortedWith(
                 compareByDescending<ProcessAppItem> { it.isFrozen }
                     .thenByDescending { it.memoryBytes }

@@ -31,12 +31,12 @@ object RuntimeLogStore {
     @Volatile
     private var recordMode: SettingsStore.LogRecordMode = SettingsStore.LogRecordMode.ALL
 
-    private val bgPrefix = "\u8fdb\u5165\u540e\u53f0"
-    private val freezePrefix = "\u51bb\u7ed3"
-    private val unfreezePrefix = "\u89e3\u51bb"
-    private val pollPrefix = "[\u8f6e\u8be2]"
-    private val broadcastUnfreezePrefix = "\u5e7f\u64ad\u89e6\u53d1\u89e3\u51bb"
-    private val broadcastDeliverPrefix = "\u5e7f\u64ad\u7ee7\u7eed\u5206\u53d1"
+    private val bgPrefix = "进入后台"
+    private val freezePrefix = "冻结"
+    private val unfreezePrefix = "解冻"
+    private val pollPrefix = "[轮询]"
+    private val broadcastUnfreezePrefix = "广播触发解冻"
+    private val broadcastDeliverPrefix = "广播继续分发"
     private const val holdFreezePrefix = "hold freeze "
 
     fun refreshFromRuntime() {
@@ -102,6 +102,9 @@ object RuntimeLogStore {
             throttleMap[throttleKey] = now
         }
 
+        // Always mirror diagnostic logs to Android Logcat so debugging is not blocked by UI log mode.
+        Log.i("Silence", "Silence|$source|$message")
+
         if (!shouldShow(recordMode, category)) {
             return
         }
@@ -112,7 +115,6 @@ object RuntimeLogStore {
                 operationLogs.removeFirst()
             }
         }
-        Log.i("Silence", "Silence|$source|$message")
     }
 
     fun clear() = synchronized(lock) {

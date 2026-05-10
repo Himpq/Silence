@@ -23,6 +23,7 @@
     <string name="module_state_checking">Checking LSPosed runtime logs...</string>
 
     <string name="process_root_request">&#35831;&#27714; Root</string>
+    <string name="process_force_poll">&#21047;&#26032;</string>
     <string name="process_refreshing">&#27491;&#22312;&#21047;&#26032;&#36827;&#31243;&#21015;&#34920;...</string>
     <string name="process_root_missing">Root &#26410;&#25480;&#26435;&#65292;&#26080;&#27861;&#35835;&#21462;&#36827;&#31243;&#25968;&#25454;</string>
     <string name="process_empty">&#24403;&#21069;&#27809;&#26377;&#21487;&#26174;&#31034;&#30340;&#24212;&#29992;&#36827;&#31243;</string>
@@ -51,6 +52,7 @@
     <string name="process_action_whitelist">&#30333;&#21517;&#21333;</string>
     <string name="process_whitelist_enabled">&#24050;&#21152;&#20837;&#30333;&#21517;&#21333;</string>
     <string name="process_whitelist_disabled">&#24050;&#31227;&#20986;&#30333;&#21517;&#21333;</string>
+    <string name="process_self_whitelist_fixed">Silence &#26159;&#20869;&#32622;&#30333;&#21517;&#21333;&#65292;&#26080;&#27861;&#21462;&#28040;</string>
     <string name="process_state_whitelist">&#30333;&#21517;&#21333;</string>
     <string name="process_action_save">&#20445;&#23384;&#35268;&#21017;</string>
     <string name="process_toggle_success">&#20923;&#32467;&#29366;&#24577;&#24050;&#26356;&#26032;</string>

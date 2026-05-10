@@ -99,11 +99,18 @@ class LogsFragment : Fragment() {
         if (!refreshing.compareAndSet(false, true)) {
             return
         }
+        val appContext = context?.applicationContext
+        if (appContext == null) {
+            refreshing.set(false)
+            return
+        }
         Thread {
             try {
                 RuntimeLogStore.refreshFromRuntime()
-                val logs = RuntimeLogStore.snapshotLogs(currentLogMode())
+                val mode = SettingsStore.getLogRecordMode(appContext)
+                val logs = RuntimeLogStore.snapshotLogs(mode)
                 activity?.runOnUiThread {
+                    if (!isAdded || _binding == null) return@runOnUiThread
                     renderLogs(logs)
                 }
             } finally {
@@ -113,17 +120,18 @@ class LogsFragment : Fragment() {
     }
 
     private fun renderLogs(logs: List<String>) {
-        if (_binding == null) return
+        val bindingRef = _binding ?: return
         if (logs.isEmpty()) {
-            binding.logTextView.text = getString(R.string.logs_empty_hint)
+            bindingRef.logTextView.text = getString(R.string.logs_empty_hint)
             return
         }
-        val previousScrollY = binding.logScrollView.scrollY
-        binding.logTextView.text = logs.joinToString("\n")
-        binding.logScrollView.post {
+        val previousScrollY = bindingRef.logScrollView.scrollY
+        bindingRef.logTextView.text = logs.joinToString("\n")
+        bindingRef.logScrollView.post {
             if (_binding == null) return@post
-            val maxScroll = (binding.logTextView.height - binding.logScrollView.height).coerceAtLeast(0)
-            binding.logScrollView.scrollTo(0, previousScrollY.coerceAtMost(maxScroll))
+            val b = _binding ?: return@post
+            val maxScroll = (b.logTextView.height - b.logScrollView.height).coerceAtLeast(0)
+            b.logScrollView.scrollTo(0, previousScrollY.coerceAtMost(maxScroll))
         }
     }
 

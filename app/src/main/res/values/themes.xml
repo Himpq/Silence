@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Slience" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Theme.Silence" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/brand_primary</item>
         <item name="colorSecondary">@color/brand_primary</item>
         <item name="android:statusBarColor">@color/surface_bg</item>

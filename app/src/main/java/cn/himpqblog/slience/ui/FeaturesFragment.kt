@@ -7,6 +7,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.fragment.app.Fragment
+import cn.himpqblog.slience.config.FreezeListStore
 import cn.himpqblog.slience.databinding.FragmentFeaturesBinding
 import cn.himpqblog.slience.settings.SettingsStore
 
@@ -78,6 +79,7 @@ class FeaturesFragment : Fragment() {
             override fun afterTextChanged(s: Editable?) {
                 val value = s?.toString()?.toIntOrNull() ?: return
                 SettingsStore.setHookPollIntervalSeconds(context, value)
+                FreezeListStore.syncRuntimeMirror(context)
             }
         })
     }

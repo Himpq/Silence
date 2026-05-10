@@ -6,13 +6,14 @@ import cn.himpqblog.slience.hook.RuntimeLogStore
 import cn.himpqblog.slience.settings.SettingsStore
 import com.topjohnwu.superuser.Shell
 
-class SlienceApp : Application() {
+class SilenceApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Shell.enableVerboseLogging = BuildConfig.DEBUG
         RuntimeLogStore.setRecordMode(SettingsStore.getLogRecordMode(this))
         runCatching {
             FreezeListStore.ensureRuntimeConfig(this)
+            FreezeListStore.syncRuntimeMirror(this)
         }
     }
 }

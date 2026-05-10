@@ -1,5 +1,12 @@
 {
   "apps": {
+    "cn.himpqblog.slience": {
+      "freeze_processes": [
+        "ALL"
+      ],
+      "dont_freeze_when": [],
+      "whitelist": true
+    },
     "com.bilibili.app.in": {
       "freeze_processes": [
         "ijkservice",
@@ -8,7 +15,7 @@
       "dont_freeze_when": [
         "AUDIO",
         "NETWORK",
-        "FOREGROUND_SERVICE"
+        "VISIBLE"
       ]
     },
     "com.tencent.mobileqq": {
@@ -18,8 +25,9 @@
         "peak"
       ],
       "dont_freeze_when": [
-        "VOIP",
-        "NOTIFICATION"
+        "AUDIO",
+        "NETWORK",
+        "VISIBLE"
       ]
     }
   }

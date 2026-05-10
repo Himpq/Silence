@@ -1,10 +1,11 @@
-package cn.himpqblog.slience.process
+﻿package cn.himpqblog.slience.process
 
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.SystemClock
+import cn.himpqblog.slience.config.FreezeListStore
 import cn.himpqblog.slience.hook.RuntimeLogStore
 import com.topjohnwu.superuser.Shell
 import java.io.BufferedReader
@@ -67,6 +68,81 @@ object ProcessInspector {
         val isSuccess: Boolean,
         val code: Int
     )
+
+    fun applyFreezeCommand(
+        context: Context,
+        packageName: String,
+        freeze: Boolean,
+        targetNames: Set<String>
+    ): Boolean {
+        val shell = runCatching { Shell.getShell() }.getOrNull() ?: return false
+        val pm = context.packageManager
+        val appInfo = runCatching { pm.getApplicationInfo(packageName, 0) }.getOrNull() ?: return false
+        val uid = appInfo.uid
+        if (uid < 10000) {
+            return false
+        }
+        val entries = collectEntriesForPackage(shell, uid, packageName)
+        if (entries.isEmpty()) {
+            RuntimeLogStore.appendDiagnostic(
+                source = "ipc",
+                message = "applyFreezeCommand entries empty package=$packageName uid=$uid",
+                throttleKey = "ipc_entries_empty_$packageName",
+                throttleMs = 3000L
+            )
+            return false
+        }
+        val item = ProcessAppItem(
+            packageName = packageName,
+            appName = pm.getApplicationLabel(appInfo).toString(),
+            icon = runCatching { pm.getApplicationIcon(appInfo) }.getOrNull(),
+            uid = uid,
+            processCount = entries.size,
+            frozenProcessCount = entries.count { it.isFrozen },
+            processNames = entries.map { it.displayName }.distinct(),
+            frozenProcessNames = entries.filter { it.isFrozen }.map { it.displayName }.toSet(),
+            childProcessNames = entries.map { "${it.displayName}(${it.pid})" },
+            processEntries = entries,
+            isFrozen = entries.any { it.isFrozen },
+            freezeMode = if (entries.any { it.isFrozen }) "V2" else "V2",
+            memoryBytes = 0L,
+            cpuPercent = 0.0
+        )
+        val targetSet = if (targetNames.isEmpty()) setOf("ALL") else targetNames
+        val targetFrozen = freeze
+        val command = buildFreezeToggleCommandForTarget(item, targetFrozen, targetSet)
+        val result = shell.newJob().add(command).exec()
+        val wrote = result.out.firstOrNull { it.startsWith("writes|") }
+            ?.substringAfter("writes|")
+            ?.toIntOrNull()
+            ?: 0
+        val success = result.isSuccess && wrote > 0
+        if (success) {
+            if (targetFrozen) {
+                silenceManagedFrozenPackages.add(packageName)
+            } else {
+                silenceManagedFrozenPackages.remove(packageName)
+            }
+        }
+        RuntimeLogStore.appendDiagnostic(
+            source = "ipc",
+            message = "applyFreezeCommand package=$packageName freeze=$freeze wrote=$wrote exit=${result.code}",
+            throttleKey = "ipc_apply_$packageName",
+            throttleMs = 0L
+        )
+        if (success) {
+            syncRuntimeMirrorIfPossible(context)
+        }
+        return success
+    }
+
+    fun markManagedFrozen(packageName: String, frozen: Boolean) {
+        if (frozen) {
+            silenceManagedFrozenPackages.add(packageName)
+        } else {
+            silenceManagedFrozenPackages.remove(packageName)
+        }
+    }
 
     fun collect(context: Context, previous: CpuSnapshot?): ProcessCollectResult {
         val collectStart = SystemClock.elapsedRealtime()
@@ -280,7 +356,7 @@ object ProcessInspector {
 
     fun toggleFreeze(item: ProcessAppItem, targetNames: Set<String> = emptySet()): Boolean {
         val targetFrozen = !item.isFrozen
-        val command = buildFreezeToggleCommand(item, targetFrozen, targetNames)
+        val command = buildFreezeToggleCommandForTarget(item, targetFrozen, targetNames)
         val shell = runCatching { Shell.getShell() }.getOrNull() ?: return false
         val libsuResult = shell.newJob().add(command).exec()
         val result = if (libsuResult.isSuccess && (libsuResult.out.isNotEmpty() || libsuResult.err.isNotEmpty())) {
@@ -423,7 +499,7 @@ object ProcessInspector {
                     freezeMode = when {
                         !isFrozen -> "V2"
                         silenceManagedFrozenPackages.contains(meta.packageName) -> "V2"
-                        else -> "系统V2"
+                        else -> "SYSTEM_V2"
                     },
                     memoryBytes = memoryBytes,
                     cpuPercent = cpuPercent
@@ -447,10 +523,34 @@ object ProcessInspector {
         return if (silenceManagedFrozenPackages.contains(packageName)) "V2" else "SYSTEM_V2"
     }
 
-    private fun buildFreezeToggleCommand(item: ProcessAppItem, frozen: Boolean, targetNames: Set<String>): String {
+    private fun buildFreezeToggleCommandForTarget(item: ProcessAppItem, frozen: Boolean, targetNames: Set<String>): String {
         val state = if (frozen) 1 else 0
         val pidList = resolveTargetEntries(item, targetNames).joinToString(" ") { it.pid.toString() }
         return """writes=0; uid_file="$CGROUP_FREEZE_BASE/uid_${item.uid}/cgroup.freeze"; for pid in $pidList; do pid_file="$CGROUP_FREEZE_BASE/uid_${item.uid}/pid_${'$'}pid/cgroup.freeze"; if [ -w "${'$'}pid_file" ]; then echo $state > "${'$'}pid_file" && writes=${'$'}((writes+1)); fi; done; if [ "${'$'}writes" -eq 0 ] && [ -w "${'$'}uid_file" ]; then echo $state > "${'$'}uid_file" && writes=${'$'}((writes+1)); elif [ $state -eq 0 ] && [ -w "${'$'}uid_file" ]; then echo 0 > "${'$'}uid_file" && writes=${'$'}((writes+1)); fi; echo "writes|${'$'}writes" """
+    }
+
+    private fun collectEntriesForPackage(shell: Shell, uid: Int, packageName: String): List<ProcessEntry> {
+        val command = """ps -A -o PID,UID,NAME 2>/dev/null | awk '$2==$uid {print $1 "|" $3}'"""
+        val result = execProcessCommand(
+            shell = shell,
+            source = "ipc-cmd",
+            command = command,
+            throttleKey = "ipc_collect_$packageName",
+            displayCommand = "collect entries for $packageName uid=$uid"
+        )
+        if (!result.isSuccess) {
+            return emptyList()
+        }
+        val entries = result.out.mapNotNull { line ->
+            val parts = line.trim().split('|')
+            if (parts.size != 2) return@mapNotNull null
+            val pid = parts[0].toIntOrNull() ?: return@mapNotNull null
+            val proc = parts[1].trim()
+            if (proc.isEmpty()) return@mapNotNull null
+            val display = proc.substringAfter(':', "").ifBlank { "main" }
+            ProcessEntry(pid = pid, displayName = display, isFrozen = false)
+        }
+        return entries
     }
 
     private fun buildRuntimeStateCommand(item: ProcessAppItem): String {
@@ -470,9 +570,9 @@ object ProcessInspector {
             if [ -n "${'$'}uid" ]; then
               proc_state=${'$'}(cmd activity get-uid-state "${'$'}uid" 2>/dev/null | tr -d '\r')
               proc_state_num=${'$'}(echo "${'$'}proc_state" | grep -Eo '[-]?[0-9]+' | head -n 1)
-              if [ -n "${'$'}proc_state_num" ] && [ "${'$'}proc_state_num" -le 8 ]; then
+              if [ -n "${'$'}proc_state_num" ] && [ "${'$'}proc_state_num" -le 2 ]; then
                 visible=1
-              elif echo "${'$'}proc_state" | grep -Eiq 'TOP|VISIBLE|FOREGROUND'; then
+              elif echo "${'$'}proc_state" | grep -Eiq '^TOP$'; then
                 visible=1
               fi
             fi
@@ -481,7 +581,11 @@ object ProcessInspector {
               if dumpsys audio 2>/dev/null | grep -E "uid[:= ]${'$'}uid\\b" | grep -Eiq "started|active|playback"; then
                 audio=1
               fi
-            elif dumpsys audio 2>/dev/null | grep -Fq "$packageName"; then
+            fi
+            if [ "${'$'}audio" -eq 0 ] && dumpsys media_session 2>/dev/null | grep -F "$packageName" -A 8 | grep -Eiq "state=3|PlaybackState.*state=3"; then
+              audio=1
+            fi
+            if [ "${'$'}audio" -eq 0 ] && dumpsys audio 2>/dev/null | grep -F "$packageName" | grep -Eiq "started|active|playback"; then
               audio=1
             fi
 
@@ -1073,6 +1177,12 @@ object ProcessInspector {
         }
     }
 
+    private fun syncRuntimeMirrorIfPossible(context: Context) {
+        runCatching {
+            FreezeListStore.syncRuntimeMirror(context)
+        }
+    }
+
     private fun launchProbeIfNeeded() {
         if (!probeRunning.compareAndSet(false, true)) {
             return
@@ -1385,3 +1495,4 @@ object ProcessInspector {
         val txBytes: Long
     )
 }
+
