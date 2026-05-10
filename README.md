@@ -4,6 +4,8 @@ Silence is a LSPosed module that allows you to freeze or kill apps when they are
 It is designed to be simple and easy to use, and provide multiple customization options to suit your needs and fit your devices.  
 <br>
 <br>
+<img height="500" alt="image" src="https://github.com/user-attachments/assets/1fb876e7-56ec-4533-a661-94ba23e56ea9" />
+
 
 ## Supported
 ### Freeze Types
