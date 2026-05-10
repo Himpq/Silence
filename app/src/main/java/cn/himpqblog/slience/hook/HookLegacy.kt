@@ -405,6 +405,11 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         if (packageName.isNullOrBlank()) {
             return
         }
+        synchronized(packageStateLock) {
+            if (movedToBackground) {
+                packageForegroundPids.remove(packageName)
+            }
+        }
         signalPackageState(packageName, movedToBackground, source)
     }
 
@@ -670,6 +675,18 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
             val previousDesired = packageLastDesiredState[packageName]
             val lastSignal = packageLastSignalAt[packageName] ?: 0L
+            val forceForegroundSignal =
+                movedToForeground && (
+                    frozenPackages.contains(packageName) ||
+                        packageLastCommittedBackground[packageName] == true ||
+                        packageDesiredBackground[packageName] == true
+                )
+            if (forceForegroundSignal) {
+                packageLastDesiredState[packageName] = false
+                packageLastSignalAt[packageName] = now
+                shouldSignal = true
+                return@synchronized
+            }
             if (previousDesired == desiredBackground && (now - lastSignal) < PACKAGE_SIGNAL_DEBOUNCE_MS) {
                 return
             }
@@ -694,6 +711,12 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         val hasRule = freezeRules.containsKey(normalized)
         if (!hasRule && !frozenPackages.contains(normalized)) {
             return
+        }
+
+        if (movedToBackground) {
+            synchronized(packageStateLock) {
+                packageForegroundPids.remove(normalized)
+            }
         }
 
         packageDesiredBackground[normalized] = movedToBackground
@@ -727,6 +750,15 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     private fun commitBackgroundState(packageName: String, source: String): Boolean {
+        if (packageDesiredBackground[packageName] == false) {
+            return false
+        }
+        val rule = freezeRules[packageName] ?: return false
+        val decision = evaluateFreezeDecision(packageName, rule)
+        if (!decision.shouldFreeze) {
+            logCommitAbort(packageName, source, decision.reason)
+            return false
+        }
         val now = System.currentTimeMillis()
         val wasFrozen = frozenPackages.contains(packageName)
         val lastDispatch = packageLastFreezeDispatchAt[packageName] ?: 0L
@@ -739,7 +771,6 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         if (lastBackground == true && now - lastCommit < MIN_COMMIT_SWITCH_INTERVAL_MS) {
             return false
         }
-        val rule = freezeRules[packageName] ?: return false
         if (rule.whitelist || packageName == SELF_PACKAGE) {
             return false
         }
@@ -748,6 +779,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         val write = writeFreezeStateForPackage(packageName, rule, targetFrozen = true)
         if (write.writes <= 0) {
             logFreezeFailure(packageName, source, "冻结探针失败(IPC已发)", write.reason)
+            return false
         }
         frozenPackages.add(packageName)
         packageLastCommitAt[packageName] = now
@@ -771,10 +803,10 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     private fun commitForegroundState(packageName: String, source: String) {
         packageLaunchProtectUntil[packageName] = System.currentTimeMillis() + FOREGROUND_RETURN_PROTECT_MS
         packageDesiredBackground[packageName] = false
-        if (!frozenPackages.contains(packageName)) {
+        val rule = freezeRules[packageName]
+        if (rule == null && !frozenPackages.contains(packageName)) {
             return
         }
-        val rule = freezeRules[packageName]
         dispatchFreezeCommandIpc(packageName, freeze = false, rule = rule, source = source)
         val write = writeFreezeStateForPackage(packageName, rule, targetFrozen = false)
         if (write.writes <= 0) {
@@ -1001,7 +1033,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             }
             return false
         }
-        return isPackageForegroundTracked(packageName)
+        return false
     }
 
     private fun isPackageVisible(packageName: String): Boolean {
@@ -1061,6 +1093,17 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
         failureLogAt[key] = now
         logHookDebug("skip $packageName reason=$reason")
+    }
+
+    private fun logCommitAbort(packageName: String, source: String, reason: String) {
+        val key = "commit_abort|$packageName|$source|$reason"
+        val now = System.currentTimeMillis()
+        val last = failureLogAt[key] ?: 0L
+        if (now - last < SKIP_LOG_THROTTLE_MS) {
+            return
+        }
+        failureLogAt[key] = now
+        logHookDebug("取消冻结 $packageName source=$source reason=$reason")
     }
 
     private fun resolvePackageUid(packageName: String): Int? {
