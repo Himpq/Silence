@@ -8,8 +8,10 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -17,7 +19,6 @@ import cn.himpqblog.slience.R
 import cn.himpqblog.slience.config.FreezeListStore
 import cn.himpqblog.slience.databinding.DialogProcessDetailBinding
 import cn.himpqblog.slience.databinding.FragmentProcessBinding
-import cn.himpqblog.slience.databinding.ViewStatePopupBinding
 import cn.himpqblog.slience.hook.RuntimeLogStore
 import cn.himpqblog.slience.process.AppRuntimeState
 import cn.himpqblog.slience.process.CpuSnapshot
@@ -29,6 +30,7 @@ import cn.himpqblog.slience.settings.SettingsStore
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -183,6 +185,18 @@ class ProcessFragment : Fragment() {
                     }
                 }
                 pollCachedStatesIfNeeded(result.items)
+            } catch (t: Throwable) {
+                RuntimeLogStore.appendDiagnostic(
+                    source = "process",
+                    message = "refreshProcessList failed: ${t.javaClass.name}: ${t.message ?: "no-message"}",
+                    throttleKey = "process_refresh_exception",
+                    throttleMs = 0L,
+                    category = RuntimeLogStore.LogCategory.ERROR
+                )
+                activity?.runOnUiThread {
+                    if (_binding == null) return@runOnUiThread
+                    binding.processStatusValue.text = "进程刷新失败"
+                }
             } finally {
                 refreshing.set(false)
             }
@@ -315,57 +329,51 @@ class ProcessFragment : Fragment() {
         } else {
             ""
         }
-        val cached = stateCache[item.packageName]
-        if (cached == null) {
-            Thread {
-                val state = runCatching { ProcessInspector.inspectRuntimeState(item) }
-                    .getOrDefault(AppRuntimeState(false, false, false))
-                stateCache[item.packageName] = state
-                activity?.runOnUiThread {
-                    if (_binding == null) return@runOnUiThread
-                    showStatePopup(item, buildStateText(ctx, state) + whitelistSuffix)
-                }
-            }.start()
-            return
-        }
-        showStatePopup(item, buildStateText(ctx, cached) + whitelistSuffix)
+        val appContext = ctx.applicationContext
+        Thread {
+            val state = runCatching { ProcessInspector.inspectRuntimeState(appContext, item) }
+                .getOrElse { stateCache[item.packageName] ?: AppRuntimeState(false, false, false) }
+            stateCache[item.packageName] = state
+            activity?.runOnUiThread {
+                if (_binding == null) return@runOnUiThread
+                showStatePopup(item, buildStateText(ctx, state) + whitelistSuffix)
+            }
+        }.start()
     }
 
     private fun pollCachedStatesIfNeeded(items: List<ProcessAppItem>) {
-        val ctx = context?.applicationContext ?: return
-        if (items.isEmpty()) return
-        val intervalMs = SettingsStore.getAppStatePollIntervalSeconds(ctx) * 1000L
+        val ctx = context ?: return
+        val appContext = ctx.applicationContext
         val now = SystemClock.elapsedRealtime()
-        if (now - lastStatePollAt < intervalMs) return
-        if (!statePolling.compareAndSet(false, true)) return
+        val intervalMs = SettingsStore.getAppStatePollIntervalSeconds(ctx) * 1000L
+        if (now - lastStatePollAt < intervalMs) {
+            return
+        }
+        if (!statePolling.compareAndSet(false, true)) {
+            return
+        }
         lastStatePollAt = now
 
-        val freezeRuleTargets = items.filter { FreezeListStore.loadRule(ctx, it.packageName) != null }
-        val targets = (freezeRuleTargets + items.filterNot { it.isFrozen })
-            .distinctBy { it.packageName }
+        val targets = nextStateBatch(items.filter { !it.isFrozen })
         if (targets.isEmpty()) {
             statePolling.set(false)
             return
         }
+
         Thread {
             try {
-                val keep = targets.map { it.packageName }.toSet()
-                stateCache.keys.toList().forEach { key ->
-                    if (!keep.contains(key)) {
-                        stateCache.remove(key)
-                    }
+                val updates = LinkedHashMap<String, AppRuntimeState>(targets.size)
+                targets.forEach { item ->
+                    updates[item.packageName] = runCatching {
+                        ProcessInspector.inspectRuntimeState(appContext, item)
+                    }.getOrDefault(AppRuntimeState(false, false, false))
                 }
-                val batch = nextStateBatch(targets)
-                batch.forEach { item ->
-                    val state = ProcessInspector.inspectRuntimeState(item)
-                    stateCache[item.packageName] = state
-                    RuntimeLogStore.appendDiagnostic(
-                        source = "state",
-                        message = "${item.packageName} ${buildStateText(ctx, state)}",
-                        throttleKey = "state_poll_${item.packageName}",
-                        throttleMs = 3000L,
-                        category = RuntimeLogStore.LogCategory.ALL
-                    )
+                activity?.runOnUiThread {
+                    if (_binding == null) return@runOnUiThread
+                    updates.forEach { (pkg, state) ->
+                        stateCache[pkg] = state
+                    }
+                    adapter.notifyDataSetChanged()
                 }
             } finally {
                 statePolling.set(false)
@@ -392,9 +400,13 @@ class ProcessFragment : Fragment() {
             return context.getString(R.string.process_state_cache_empty)
         }
         val labels = buildList {
+            if (state.isForeground) {
+                add(context.getString(R.string.process_state_foreground))
+            } else if (state.isVisible) {
+                add(context.getString(R.string.process_state_visible))
+            }
             if (state.isAudioActive) add(context.getString(R.string.process_state_audio))
             if (state.isNetworkActive) add(context.getString(R.string.process_state_network))
-            if (state.isVisible) add(context.getString(R.string.process_state_visible))
         }
         return if (labels.isEmpty()) {
             context.getString(R.string.process_state_idle)
@@ -405,21 +417,21 @@ class ProcessFragment : Fragment() {
 
     private fun showStatePopup(item: ProcessAppItem, text: String) {
         val hostActivity = activity ?: return
-        val popupBinding = ViewStatePopupBinding.inflate(layoutInflater)
-        popupBinding.statePopupIcon.setImageDrawable(
+        val popupView = layoutInflater.inflate(R.layout.view_process_state_popup, null, false)
+        popupView.findViewById<ImageView>(R.id.processStatePopupIcon).setImageDrawable(
             item.icon ?: requireContext().packageManager.defaultActivityIcon
         )
-        popupBinding.statePopupTitle.text = if (item.isFrozen) {
+        popupView.findViewById<TextView>(R.id.processStatePopupTitle).text = if (item.isFrozen) {
             "${item.appName}(已冻结)"
         } else {
             item.appName
         }
-        popupBinding.statePopupMessage.text = text
+        popupView.findViewById<TextView>(R.id.processStatePopupMessage).text = text
 
         mainHandler.removeCallbacks(dismissStatePopupRunnable)
         statePopupWindow?.dismiss()
         statePopupWindow = PopupWindow(
-            popupBinding.root,
+            popupView,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
             false

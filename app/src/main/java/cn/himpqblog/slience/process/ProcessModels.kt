@@ -33,7 +33,8 @@ data class CpuSnapshot(
 data class AppRuntimeState(
     val isAudioActive: Boolean,
     val isNetworkActive: Boolean,
-    val isVisible: Boolean
+    val isVisible: Boolean,
+    val isForeground: Boolean = false
 )
 
 data class ProcessCollectResult(

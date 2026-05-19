@@ -19,6 +19,11 @@
     <string name="home_title">Silence</string>
     <string name="home_context">&#24403;&#21069;&#29256;&#26412;: v2.1</string>
     <string name="home_hook_status_title">Hook Status</string>
+    <string name="home_hook_enabled_title">Hook 开关</string>
+    <string name="home_foreground_title">当前前台应用</string>
+    <string name="home_foreground_waiting">等待系统状态刷新...</string>
+    <string name="home_foreground_unknown">当前未知</string>
+    <string name="home_foreground_format">%1$s | %2$s</string>
     <string name="module_state_waiting">Waiting for LSPosed to load in system_server</string>
     <string name="module_state_checking">Checking LSPosed runtime logs...</string>
 
@@ -62,6 +67,7 @@
     <string name="process_rule_preview_loading">&#27491;&#22312;&#26816;&#26597;&#36827;&#31243;&#29366;&#24577;...</string>
     <string name="process_state_audio">&#25773;&#25918;&#20013;</string>
     <string name="process_state_network">&#20351;&#29992;&#32593;&#32476;&#20013;</string>
+    <string name="process_state_foreground">&#21069;&#21488;&#24212;&#29992;</string>
     <string name="process_state_visible">&#21069;&#21488;&#21487;&#35265;</string>
     <string name="process_state_idle">&#24403;&#21069;&#26080;&#27963;&#21160;&#29366;&#24577;</string>
     <string name="process_state_cache_empty">&#26242;&#26080;&#29366;&#24577;&#32531;&#23384;</string>
@@ -91,4 +97,38 @@ CPU: %5$s
     <string name="settings_process_refresh_hint">&#36827;&#31243;&#21047;&#26032;&#38388;&#38548;&#65288;&#31186;&#65289;</string>
     <string name="settings_state_poll_hint">&#36718;&#35810;&#38388;&#38548;&#65288;&#31186;&#65289;</string>
     <string name="settings_hook_poll_hint">Hook&#36718;&#35810;&#38388;&#38548;&#65288;&#31186;&#65289;</string>
+    <string name="settings_hook_enabled_title">&#21551;&#29992; Hook</string>
+    <string name="settings_hook_enabled_summary">&#20851;&#38381;&#21518; Hook &#20173;&#27880;&#20837;&#65292;&#20294;&#19981;&#25191;&#34892;&#20923;&#32467;&#12289;&#35299;&#20923;&#21644;&#36718;&#35810;&#36827;&#36755;&#12290;</string>
+    <string name="settings_process_debug_log_title">&#21551;&#29992;&#36827;&#31243;&#35843;&#35797;&#26085;&#24535;</string>
+    <string name="settings_process_debug_log_summary">&#25511;&#21046; process-cmd / process-enter / process-perf &#31561;&#35843;&#35797;&#26085;&#24535;&#65292;&#40664;&#35748;&#20851;&#38381;&#12290;</string>
+    <string name="settings_foreground_debug_log_title">启用前台进程调试日志</string>
+    <string name="settings_foreground_debug_log_summary">控制 foreground recv、通知前台刷新、前台解析失败等日志，默认关闭，避免后台持续刷日志。</string>
+    <string name="settings_notification_title">&#20038;&#39569;&#36890;&#30693;</string>
+    <string name="settings_notification_summary">在通知栏持续显示当前前台应用和估算功耗，便于后续关注。</string>
+    <string name="settings_notification_toggle_title">&#21551;&#29992;&#20038;&#39569;&#36890;&#30693;</string>
+    <string name="settings_usage_access_title">前台来源</string>
+    <string name="settings_usage_access_summary">当前前台应用改为读取 Android UsageStats，不再依赖 Hook 写入的旧状态。</string>
+    <string name="settings_usage_access_state_enabled">使用情况访问已开启</string>
+    <string name="settings_usage_access_state_disabled">使用情况访问未开启，前台应用会显示为未知</string>
+    <string name="settings_usage_access_button">打开使用情况访问</string>
+
+    <string name="notification_title">Silence &#29366;&#24577;&#30417;&#25511;</string>
+    <string name="notification_channel_name">&#29366;&#24577;&#30417;&#25511;</string>
+    <string name="notification_channel_description">持续显示当前前台应用和电池功耗。</string>
+    <string name="notification_foreground_label">&#24403;&#21069;&#21069;&#21488;</string>
+    <string name="notification_power_label">当前功耗</string>
+    <string name="notification_content_format">%1$s &#183; %2$s</string>
+    <string name="notification_power_unknown">功耗未知</string>
+    <string name="settings_notification_permission_required">需要通知权限才能开启常驻通知</string>
+    <string name="settings_notification_permission_denied">已拒绝通知权限，常驻通知已关闭</string>
+    <string name="performance_schedule_popup_title">性能调度</string>
+    <string name="performance_schedule_popup_message">当前前台：%1$s</string>
+    <string name="performance_overlay_subtitle">点击选择模式，当前仅演示页面状态。</string>
+    <string name="performance_overlay_close_hint">点击空白区域关闭悬浮窗</string>
+    <string name="performance_overlay_selected_mode">当前模式：%1$s</string>
+    <string name="performance_mode_power_save">省电</string>
+    <string name="performance_mode_balanced">均衡</string>
+    <string name="performance_mode_performance">性能</string>
+    <string name="performance_mode_extreme">极致</string>
+
 </resources>

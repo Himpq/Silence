@@ -10,6 +10,10 @@ object SettingsStore {
     private const val KEY_APP_STATE_POLL_INTERVAL_SECONDS = "app_state_poll_interval_seconds"
     private const val KEY_PROCESS_REFRESH_INTERVAL_SECONDS = "process_refresh_interval_seconds"
     private const val KEY_HOOK_POLL_INTERVAL_SECONDS = "hook_poll_interval_seconds"
+    private const val KEY_HOOK_ENABLED = "hook_enabled"
+    private const val KEY_PROCESS_DEBUG_LOG_ENABLED = "process_debug_log_enabled"
+    private const val KEY_FOREGROUND_DEBUG_LOG_ENABLED = "foreground_debug_log_enabled"
+    private const val KEY_PERSISTENT_NOTIFICATION_ENABLED = "persistent_notification_enabled"
 
     enum class ProcessSortMode {
         CPU,
@@ -88,6 +92,50 @@ object SettingsStore {
         prefs(context)
             .edit()
             .putInt(KEY_HOOK_POLL_INTERVAL_SECONDS, seconds.coerceIn(5, 300))
+            .apply()
+    }
+
+    fun isHookEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_HOOK_ENABLED, true)
+    }
+
+    fun setHookEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_HOOK_ENABLED, enabled)
+            .apply()
+    }
+
+    fun isProcessDebugLogEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_PROCESS_DEBUG_LOG_ENABLED, false)
+    }
+
+    fun setProcessDebugLogEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_PROCESS_DEBUG_LOG_ENABLED, enabled)
+            .apply()
+    }
+
+    fun isForegroundDebugLogEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_FOREGROUND_DEBUG_LOG_ENABLED, false)
+    }
+
+    fun setForegroundDebugLogEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_FOREGROUND_DEBUG_LOG_ENABLED, enabled)
+            .apply()
+    }
+
+    fun isPersistentNotificationEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_PERSISTENT_NOTIFICATION_ENABLED, false)
+    }
+
+    fun setPersistentNotificationEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_PERSISTENT_NOTIFICATION_ENABLED, enabled)
             .apply()
     }
 }

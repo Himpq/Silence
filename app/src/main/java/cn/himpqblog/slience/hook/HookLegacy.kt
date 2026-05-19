@@ -48,6 +48,10 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         private var moduleApkPath: String? = null
         @Volatile
         private var appContext: Context? = null
+        @Volatile
+        private var lastAtmsService: Any? = null
+        @Volatile
+        private var currentTopResumedPackage: String? = null
 
         private val hookCallbackSeen = AtomicBoolean(false)
         private val freezeRulesLoaded = AtomicBoolean(false)
@@ -88,6 +92,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         private const val LAUNCH_PROTECT_MS = 15_000L
         private const val FOREGROUND_RETURN_PROTECT_MS = 5_000L
         private const val ENABLE_BRIDGE_HOT_LOGS = false
+        private const val ENABLE_IPC_LOG = false
         private const val PROCESS_STATE_TOP_THRESHOLD = 2
         private const val PROCESS_STATE_FOREGROUND_THRESHOLD = 6
         private const val PROCESS_STATE_VISIBLE_THRESHOLD = 8
@@ -148,6 +153,15 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
         runCatching {
             Log.i("Silence", "Silence|hook|$message")
+        }
+    }
+
+    private fun logIpcDebug(message: String) {
+        if (!ENABLE_IPC_LOG) {
+            return
+        }
+        runCatching {
+            Log.i("Silence", "Silence|ipc|$message")
         }
     }
 
@@ -215,7 +229,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
 
         val mergedRules = if (merged.isEmpty()) emptyMap() else merged
-        val keys = mergedRules.keys.take(12).joinToString(",")
+        val keys = mergedRules.keys.joinToString(",")
         logHookDebug(
             "freeze rules runtime merged apps=${mergedRules.size} " +
                 "primary=${primaryRules?.size ?: -1}@${primary.absolutePath} " +
@@ -235,7 +249,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             val raw = String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8)
             val rules = parseFreezeRules(raw)
             logHookDebug(
-                "freeze rules global merged apps=${rules.size} key=${FreezeListStore.runtimeGlobalRulesKey()} chars=${raw.length} keys=${rules.keys.take(12).joinToString(",")}"
+                "freeze rules global merged apps=${rules.size} key=${FreezeListStore.runtimeGlobalRulesKey()} chars=${raw.length} keys=${rules.keys.joinToString(",")}"
             )
             rules
         }.onFailure { err ->
@@ -354,6 +368,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         )
 
         totalHooks += installAtmsHooks(classLoader)
+        totalHooks += installInteractionHooks(classLoader)
 
         XposedBridge.log("$TAG installHooksForProcess result: process=$processName, hooks=$totalHooks")
         return totalHooks
@@ -395,25 +410,150 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return hookedCount
     }
 
+    private fun installInteractionHooks(classLoader: ClassLoader): Int {
+        val pwmClass = runCatching {
+            XposedHelpers.findClass("com.android.server.policy.PhoneWindowManager", classLoader)
+        }.getOrElse {
+            return 0
+        }
+
+        var hookedCount = 0
+        val methods = listOf(
+            "startedWakingUp",
+            "finishedWakingUp",
+            "screenTurnedOn",
+            "finishedGoingToSleep"
+        )
+
+        methods.forEach { methodName ->
+            runCatching {
+                val unhooks = XposedBridge.hookAllMethods(pwmClass, methodName, object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        handleInteractionSignal(
+                            source = "PWM#$methodName",
+                            pwm = param.thisObject,
+                            waking = methodName != "finishedGoingToSleep"
+                        )
+                    }
+                })
+                if (unhooks.isNotEmpty()) {
+                    hookedCount += unhooks.size
+                    XposedBridge.log("$TAG hooked ${pwmClass.name}#$methodName count=${unhooks.size}")
+                }
+            }.onFailure { err ->
+                XposedBridge.log("$TAG hook failed ${pwmClass.name}#$methodName (${err.message})")
+            }
+        }
+
+        return hookedCount
+    }
+
+    private fun handleInteractionSignal(source: String, pwm: Any?, waking: Boolean) {
+        logHookDebug("interaction $source waking=$waking")
+        if (waking) {
+            resolveTopResumedPackageNameFromPolicy(pwm)?.let { packageName ->
+                markTopResumedPackage(packageName, "$source#policy", publishForegroundState = true)
+            }
+        }
+        pollScheduler.execute {
+            runCatching { runBackgroundPoll() }
+                .onFailure { err ->
+                    logHookDebug("interaction poll failed source=$source err=${err.message ?: err.javaClass.simpleName}")
+                }
+        }
+    }
+
+    private fun resolveTopResumedPackageNameFromPolicy(pwm: Any?): String? {
+        val manager = pwm ?: return null
+        val atms = readObject(
+            manager,
+            listOf("mActivityTaskManagerInternal", "mActivityTaskManagerService", "mAtmInternal", "mAtmService")
+        ) ?: return null
+        lastAtmsService = atms
+        return resolveTopResumedPackageName(atms)
+    }
+
     private fun handleAtmsSignal(
         source: String,
         atmsService: Any?,
         args: Array<Any?>,
         movedToBackground: Boolean
     ) {
-        val packageName = resolvePackageNameFromAtmsSignal(atmsService, args)
+        if (atmsService != null) {
+            lastAtmsService = atmsService
+        }
+        val packageName = resolvePackageNameFromAtmsSignal(
+            atmsService = atmsService,
+            args = args,
+            movedToBackground = movedToBackground
+        )
         if (packageName.isNullOrBlank()) {
             return
         }
+        var clearedTopPackage = false
         synchronized(packageStateLock) {
             if (movedToBackground) {
                 packageForegroundPids.remove(packageName)
+                if (currentTopResumedPackage == packageName) {
+                    currentTopResumedPackage = null
+                    clearedTopPackage = true
+                }
+                Unit
+            } else {
+                markTopResumedPackageLocked(packageName)
+                Unit
             }
+        }
+        if (clearedTopPackage) {
+            publishForegroundPackage(null, "$source#cleared")
+        } else if (!movedToBackground) {
+            publishForegroundPackage(packageName, "$source#foreground")
         }
         signalPackageState(packageName, movedToBackground, source)
     }
 
-    private fun resolvePackageNameFromAtmsSignal(atmsService: Any?, args: Array<Any?>): String? {
+    private fun markTopResumedPackage(packageName: String, source: String) {
+        markTopResumedPackage(packageName, source, publishForegroundState = true)
+    }
+
+    private fun markTopResumedPackage(
+        packageName: String,
+        source: String,
+        publishForegroundState: Boolean
+    ) {
+        if (!isLikelyPackageName(packageName)) {
+            return
+        }
+        var changed = false
+        synchronized(packageStateLock) {
+            changed = markTopResumedPackageLocked(packageName)
+        }
+        if (publishForegroundState && changed) {
+            publishForegroundPackage(packageName, source)
+        }
+        if (changed) {
+            logHookDebug("top resumed $packageName source=$source")
+        }
+    }
+
+    private fun markTopResumedPackageLocked(packageName: String): Boolean {
+        val normalized = packageName.trim()
+        if (!isLikelyPackageName(normalized)) {
+            return false
+        }
+        val changed = currentTopResumedPackage != normalized
+        currentTopResumedPackage = normalized
+        packageLaunchProtectUntil[normalized] = System.currentTimeMillis() + LAUNCH_PROTECT_MS
+        val stalePackages = packageForegroundPids.keys.filter { it != normalized }
+        stalePackages.forEach { packageForegroundPids.remove(it) }
+        return changed
+    }
+
+    private fun resolvePackageNameFromAtmsSignal(
+        atmsService: Any?,
+        args: Array<Any?>,
+        movedToBackground: Boolean
+    ): String? {
         args.firstOrNull { it is IBinder }?.let { token ->
             val pkg = getPackageFromActivityToken(atmsService, token as IBinder)
             if (!pkg.isNullOrBlank()) return pkg
@@ -425,11 +565,47 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
 
         args.forEach { arg ->
+            if (arg != null) {
+                extractPackageNameFromRecord(arg)?.let { return it }
+                extractPackageNameFromTask(arg)?.let { return it }
+                extractPackageNameFromIntent(arg)?.let { return it }
+            }
+
             val candidate = arg?.toString()?.trim().orEmpty()
             if (isLikelyPackageName(candidate)) {
                 return candidate
             }
         }
+        return null
+    }
+
+    private fun resolveTopResumedPackageName(atmsService: Any?): String? {
+        val service = atmsService ?: return null
+
+        readObject(service, listOf("mTopResumedActivity"))?.let { record ->
+            extractPackageNameFromRecord(record)?.let { return it }
+        }
+
+        val root = readObject(service, listOf("mRootWindowContainer")) ?: return null
+
+        runCatching {
+            findNoArgMethod(root.javaClass, "getTopResumedActivity")?.let { method ->
+                method.isAccessible = true
+                method.invoke(root)
+            }
+        }.getOrNull()?.let { record ->
+            extractPackageNameFromRecord(record)?.let { return it }
+        }
+
+        runCatching {
+            findNoArgMethod(root.javaClass, "getTopDisplayFocusedRootTask")?.let { method ->
+                method.isAccessible = true
+                method.invoke(root)
+            }
+        }.getOrNull()?.let { task ->
+            extractPackageNameFromTask(task)?.let { return it }
+        }
+
         return null
     }
 
@@ -670,6 +846,9 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             }
             if (movedToBackground) {
                 foregroundSet.remove(pid)
+                if (foregroundSet.isEmpty()) {
+                    packageForegroundPids.remove(packageName)
+                }
             }
             desiredBackground = foregroundSet.isEmpty()
 
@@ -709,7 +888,20 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             return
         }
         val hasRule = freezeRules.containsKey(normalized)
-        if (!hasRule && !frozenPackages.contains(normalized)) {
+        val isManaged = hasRule || frozenPackages.contains(normalized)
+
+        if (!movedToBackground) {
+            packageDesiredBackground[normalized] = false
+            packageSignalSource[normalized] = source
+            if (!isManaged) {
+                return
+            }
+            packageSignalVersion[normalized] = (packageSignalVersion[normalized] ?: 0) + 1
+            commitForegroundState(normalized, source)
+            return
+        }
+
+        if (!isManaged) {
             return
         }
 
@@ -723,11 +915,6 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         packageSignalSource[normalized] = source
         val nextVersion = (packageSignalVersion[normalized] ?: 0) + 1
         packageSignalVersion[normalized] = nextVersion
-
-        if (!movedToBackground) {
-            commitForegroundState(normalized, "$source#immediate")
-            return
-        }
 
         packageStateScheduler.schedule({
             val latestVersion = packageSignalVersion[normalized] ?: return@schedule
@@ -750,10 +937,18 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     private fun commitBackgroundState(packageName: String, source: String): Boolean {
-        if (packageDesiredBackground[packageName] == false) {
+        val fromPoll = source.startsWith("poll:")
+        if (packageDesiredBackground[packageName] == false && !fromPoll) {
+            logCommitAbort(packageName, source, "状态标记前台")
             return false
         }
-        val rule = freezeRules[packageName] ?: return false
+        if (fromPoll) {
+            packageDesiredBackground[packageName] = true
+        }
+        val rule = freezeRules[packageName] ?: run {
+            logCommitAbort(packageName, source, "规则缺失")
+            return false
+        }
         val decision = evaluateFreezeDecision(packageName, rule)
         if (!decision.shouldFreeze) {
             logCommitAbort(packageName, source, decision.reason)
@@ -764,23 +959,21 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         val lastDispatch = packageLastFreezeDispatchAt[packageName] ?: 0L
         val allowReassert = now - lastDispatch >= FREEZE_REASSERT_INTERVAL_MS
         if (wasFrozen && !allowReassert) {
+            logCommitAbort(packageName, source, "保持冻结窗口")
             return false
         }
         val lastCommit = packageLastCommitAt[packageName] ?: 0L
         val lastBackground = packageLastCommittedBackground[packageName]
         if (lastBackground == true && now - lastCommit < MIN_COMMIT_SWITCH_INTERVAL_MS) {
+            logCommitAbort(packageName, source, "状态切换窗口")
             return false
         }
         if (rule.whitelist || packageName == SELF_PACKAGE) {
+            logCommitAbort(packageName, source, "白名单")
             return false
         }
         dispatchFreezeCommandIpc(packageName, freeze = true, rule = rule, source = source)
         packageLastFreezeDispatchAt[packageName] = now
-        val write = writeFreezeStateForPackage(packageName, rule, targetFrozen = true)
-        if (write.writes <= 0) {
-            logFreezeFailure(packageName, source, "冻结探针失败(IPC已发)", write.reason)
-            return false
-        }
         frozenPackages.add(packageName)
         packageLastCommitAt[packageName] = now
         packageLastCommittedBackground[packageName] = true
@@ -803,15 +996,12 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     private fun commitForegroundState(packageName: String, source: String) {
         packageLaunchProtectUntil[packageName] = System.currentTimeMillis() + FOREGROUND_RETURN_PROTECT_MS
         packageDesiredBackground[packageName] = false
+        publishForegroundPackage(packageName, source)
         val rule = freezeRules[packageName]
         if (rule == null && !frozenPackages.contains(packageName)) {
             return
         }
         dispatchFreezeCommandIpc(packageName, freeze = false, rule = rule, source = source)
-        val write = writeFreezeStateForPackage(packageName, rule, targetFrozen = false)
-        if (write.writes <= 0) {
-            logFreezeFailure(packageName, source, "解冻探针失败(IPC已发)", write.reason)
-        }
         frozenPackages.remove(packageName)
         val now = System.currentTimeMillis()
         packageLastCommitAt[packageName] = now
@@ -834,7 +1024,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     private fun scheduleNextPoll(delayMs: Long) {
-        val safeDelay = delayMs.coerceAtLeast(5_000L)
+        val safeDelay = delayMs.coerceAtLeast(10_000L)
         pollFuture = pollScheduler.schedule({
             if (!pollLoopRunning.compareAndSet(false, true)) {
                 scheduleNextPoll(resolveHookPollIntervalMs())
@@ -864,8 +1054,8 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
                         logHookDebug("force trigger loop failed: ${err.message ?: err.javaClass.simpleName}")
                     }
             },
-            1000L,
-            1000L,
+            3000L,
+            3000L,
             TimeUnit.MILLISECONDS
         )
     }
@@ -881,11 +1071,22 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     private fun runBackgroundPoll() {
+        if (!isHookEnabled()) {
+            logHookDebug("hook disabled, skip poll")
+            return
+        }
+        refreshTopResumedPackage("poll")
+        synchronized(packageStateLock) {
+            pruneForegroundTrackingLocked()
+        }
         loadFreezeRulesFromRuntimeFile()?.let { runtime ->
             freezeRules = runtime
         }
-        val activeKeys = freezeRules.keys.take(12).joinToString(",")
-        logHookDebug("freeze rules active apps=${freezeRules.size} keys=$activeKeys")
+        val hookDebugEnabled = isProcessDebugLogEnabled()
+        val activeKeys = freezeRules.keys.joinToString(",")
+        if (hookDebugEnabled) {
+            logHookDebug("freeze rules active apps=${freezeRules.size} keys=$activeKeys")
+        }
         val now = System.currentTimeMillis()
         val prev = lastPollAtMs
         lastPollAtMs = now
@@ -899,18 +1100,29 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
 
         val lines = ArrayList<String>()
+        val skipped = ArrayList<String>()
         val considered = ArrayList<String>()
         rules.forEach { (packageName, rule) ->
             considered.add(packageName)
+            if (!isPackageInstalled(packageName)) {
+                skipped.add("- $packageName -> 原因:包不存在")
+                logPollSkip(packageName, "包不存在")
+                return@forEach
+            }
             val decision = evaluateFreezeDecision(packageName, rule)
             if (decision.shouldFreeze) {
                 val dispatched = commitBackgroundState(packageName, "poll:${decision.reason}")
                 if (dispatched) {
                     lines.add("- $packageName -> 原因:${decision.reason}")
+                } else if (frozenPackages.contains(packageName)) {
+                    lines.add("- $packageName -> 原因:${decision.reason}(已保持冻结)")
+                } else {
+                    skipped.add("- $packageName -> 原因:${decision.reason}(未下发冻结)")
                 }
             } else if (frozenPackages.contains(packageName)) {
                 commitForegroundState(packageName, "poll:${decision.reason}")
             } else {
+                skipped.add("- $packageName -> 原因:${decision.reason}")
                 logPollSkip(packageName, decision.reason)
             }
         }
@@ -920,9 +1132,17 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         } else {
             "\n    " + lines.joinToString("\n    ")
         }
-        val consideredHead = considered.take(12).joinToString(",")
-        logHookDebug("poll considered apps=${considered.size} keys=$consideredHead")
+        val skippedDetail = if (skipped.isEmpty()) {
+            "无"
+        } else {
+            "\n    " + skipped.take(12).joinToString("\n    ")
+        }
+        val consideredHead = considered.joinToString(",")
+        if (hookDebugEnabled) {
+            logHookDebug("poll considered apps=${considered.size} keys=$consideredHead")
+        }
         logHookDebug("[轮询] time=$prevText + ${delta}ms; 本次冻结:$detail")
+        logHookDebug("[轮询] 本次未冻结原因:$skippedDetail")
         runCatching {
             RuntimeLogStore.appendDiagnostic(
                 source = "hook",
@@ -957,7 +1177,23 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }.getOrDefault("")
     }
 
+    private fun isHookEnabled(): Boolean {
+        val value = readGlobalSetting(FreezeListStore.runtimeGlobalHookEnabledKey()).trim()
+        return value != "0" && !value.equals("false", ignoreCase = true)
+    }
+
+    private fun isProcessDebugLogEnabled(): Boolean {
+        val value = readGlobalSetting(FreezeListStore.runtimeGlobalProcessDebugLogEnabledKey()).trim()
+        return value == "1" || value.equals("true", ignoreCase = true)
+    }
+
     private fun evaluateFreezeDecision(packageName: String, rule: FreezeRule): FreezeDecision {
+        if (!isHookEnabled()) {
+            return FreezeDecision(
+                shouldFreeze = false,
+                reason = "Hook关闭"
+            )
+        }
         if (rule.whitelist) {
             return FreezeDecision(
                 shouldFreeze = false,
@@ -975,11 +1211,18 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             )
         }
 
-        val foreground = isPackageTopApp(packageName)
+        val foreground = isPackageForegroundTracked(packageName)
         if (foreground) {
             return FreezeDecision(
                 shouldFreeze = false,
                 reason = "前台"
+            )
+        }
+        val uidState = readUidProcState(packageName)
+        if (uidState != null && uidState <= PROCESS_STATE_FOREGROUND_THRESHOLD) {
+            return FreezeDecision(
+                shouldFreeze = false,
+                reason = "前台(uid=$uidState)"
             )
         }
         reasons.add("切出")
@@ -1017,28 +1260,78 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun isPackageForegroundTracked(packageName: String): Boolean {
         synchronized(packageStateLock) {
+            val topPackage = currentTopResumedPackage
+            if (!topPackage.isNullOrBlank()) {
+                return topPackage == packageName
+            }
+            pruneForegroundTrackingLocked()
             val set = packageForegroundPids[packageName] ?: return false
-            return set.isNotEmpty()
+            if (set.isNotEmpty()) {
+                return true
+            }
         }
+        val uidState = readUidProcState(packageName)
+        return uidState != null && uidState <= PROCESS_STATE_FOREGROUND_THRESHOLD
     }
 
     private fun isPackageTopApp(packageName: String): Boolean {
-        val state = readUidProcState(packageName)
-        if (state != null) {
-            if (state <= PROCESS_STATE_TOP_THRESHOLD) {
-                return true
-            }
-            synchronized(packageStateLock) {
-                packageForegroundPids.remove(packageName)
-            }
-            return false
-        }
-        return false
+        return isPackageForegroundTracked(packageName)
     }
 
     private fun isPackageVisible(packageName: String): Boolean {
-        val state = readUidProcState(packageName)
-        return state != null && state <= PROCESS_STATE_TOP_THRESHOLD
+        if (isPackageForegroundTracked(packageName)) {
+            return true
+        }
+        val uidState = readUidProcState(packageName)
+        return uidState != null && uidState <= PROCESS_STATE_VISIBLE_THRESHOLD
+    }
+
+    private fun refreshTopResumedPackage(source: String) {
+        val packageName = resolveTopResumedPackageName(lastAtmsService)
+        if (packageName.isNullOrBlank()) {
+            logHookDebug("top resumed unresolved source=$source")
+            return
+        }
+        markTopResumedPackage(packageName, source, publishForegroundState = true)
+    }
+
+    private fun publishForegroundPackage(packageName: String?, source: String) {
+        val context = appContext ?: return
+        val normalized = packageName?.trim().orEmpty()
+        runCatching {
+            val resolver = context.contentResolver
+            android.provider.Settings.Global.putString(
+                resolver,
+                FreezeListStore.runtimeGlobalForegroundPackageKey(),
+                normalized
+            )
+            android.provider.Settings.Global.putString(
+                resolver,
+                FreezeListStore.runtimeGlobalForegroundSourceKey(),
+                source
+            )
+            android.provider.Settings.Global.putLong(
+                resolver,
+                FreezeListStore.runtimeGlobalForegroundUpdatedAtKey(),
+                System.currentTimeMillis()
+            )
+            logIpcDebug("foreground global package=$normalized source=$source")
+        }
+        dispatchForegroundStateIpc(packageName = normalized.takeIf { it.isNotBlank() }, source = source)
+    }
+
+    private fun pruneForegroundTrackingLocked() {
+        val iterator = packageForegroundPids.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            entry.value.removeAll { pid ->
+                val state = lastProcStateByPid[pid]
+                state == null || state >= BACKGROUND_STATE_THRESHOLD
+            }
+            if (entry.value.isEmpty()) {
+                iterator.remove()
+            }
+        }
     }
 
     private fun isPackageAudioActive(packageName: String): Boolean {
@@ -1193,6 +1486,14 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             proc.waitFor()
             lines
         }.getOrDefault(emptyList())
+    }
+
+    private fun isPackageInstalled(packageName: String): Boolean {
+        val context = appContext ?: return true
+        return runCatching {
+            context.packageManager.getApplicationInfo(packageName, 0)
+            true
+        }.getOrDefault(false)
     }
 
     private fun writeFreezeStateForPackage(
@@ -1377,11 +1678,50 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
                 context.sendBroadcast(intent)
                 false
             }
-            logHookDebug(
+            logIpcDebug(
                 "ipc->freeze package=$packageName freeze=$freeze source=$source send=${if (sendAsUser) "as_user" else "normal"}"
             )
         }.onFailure { err ->
-            logHookDebug("ipc->freeze failed package=$packageName freeze=$freeze err=${err.message ?: err.javaClass.simpleName}")
+            logIpcDebug("ipc->freeze failed package=$packageName freeze=$freeze err=${err.message ?: err.javaClass.simpleName}")
+        }
+    }
+
+    private fun dispatchForegroundStateIpc(packageName: String?, source: String) {
+        val context = appContext
+        if (context == null) {
+            logHookDebug("ipc->foreground skipped package=${packageName ?: "null"} reason=context_null")
+            return
+        }
+        val intent = Intent(FreezeCommandReceiver.ACTION_FOREGROUND_STATE).apply {
+            `package` = SELF_PACKAGE
+            addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+            val includeBgFlag = runCatching {
+                Intent::class.java.getField("FLAG_RECEIVER_INCLUDE_BACKGROUND").getInt(null)
+            }.getOrDefault(0)
+            if (includeBgFlag != 0) {
+                addFlags(includeBgFlag)
+            }
+            putExtra(FreezeCommandReceiver.EXTRA_PACKAGE_NAME, packageName.orEmpty())
+            putExtra(FreezeCommandReceiver.EXTRA_SOURCE, source)
+        }
+        runCatching {
+            val sendAsUser = runCatching {
+                val method = Context::class.java.getMethod(
+                    "sendBroadcastAsUser",
+                    Intent::class.java,
+                    Class.forName("android.os.UserHandle")
+                )
+                method.invoke(context, intent, Process.myUserHandle())
+                true
+            }.getOrElse {
+                context.sendBroadcast(intent)
+                false
+            }
+            logIpcDebug(
+                "ipc->foreground package=${packageName ?: "null"} source=$source send=${if (sendAsUser) "as_user" else "normal"}"
+            )
+        }.onFailure { err ->
+            logIpcDebug("ipc->foreground failed package=${packageName ?: "null"} source=$source err=${err.message ?: err.javaClass.simpleName}")
         }
     }
 

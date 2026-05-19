@@ -8,8 +8,10 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.fragment.app.Fragment
 import cn.himpqblog.slience.R
+import cn.himpqblog.slience.config.FreezeListStore
 import cn.himpqblog.slience.databinding.FragmentHomeBinding
 import cn.himpqblog.slience.hook.RuntimeLogStore
+import cn.himpqblog.slience.settings.SettingsStore
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
@@ -22,6 +24,7 @@ class HomeFragment : Fragment() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val refreshing = AtomicBoolean(false)
+    private val hookStatusPollingStopped = AtomicBoolean(false)
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
     private val pollRunnable = object : Runnable {
@@ -42,13 +45,22 @@ class HomeFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        hookStatusPollingStopped.set(false)
         binding.hookStatusValue.text = getString(R.string.module_state_checking)
+        val ctx = requireContext()
+        binding.hookEnabledSwitch.isChecked = SettingsStore.isHookEnabled(ctx)
+        binding.hookEnabledSwitch.setOnCheckedChangeListener { _, isChecked ->
+            SettingsStore.setHookEnabled(ctx, isChecked)
+            FreezeListStore.syncRuntimeMirror(ctx)
+        }
     }
 
     override fun onResume() {
         super.onResume()
         mainHandler.removeCallbacks(pollRunnable)
-        mainHandler.post(pollRunnable)
+        if (!hookStatusPollingStopped.get()) {
+            mainHandler.post(pollRunnable)
+        }
     }
 
     override fun onPause() {
@@ -63,6 +75,9 @@ class HomeFragment : Fragment() {
     }
 
     private fun refreshHookStatus() {
+        if (hookStatusPollingStopped.get()) {
+            return
+        }
         if (!refreshing.compareAndSet(false, true)) {
             return
         }
@@ -75,6 +90,10 @@ class HomeFragment : Fragment() {
                     if (_binding != null) {
                         binding.hookStatusValue.text = "$status | $stamp"
                     }
+                }
+                if (status == "Hook debug events active" || status.contains("active", ignoreCase = true)) {
+                    hookStatusPollingStopped.set(true)
+                    mainHandler.removeCallbacks(pollRunnable)
                 }
             } finally {
                 refreshing.set(false)

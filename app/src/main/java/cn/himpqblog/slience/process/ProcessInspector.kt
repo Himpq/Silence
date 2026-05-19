@@ -7,6 +7,7 @@ import android.graphics.drawable.Drawable
 import android.os.SystemClock
 import cn.himpqblog.slience.config.FreezeListStore
 import cn.himpqblog.slience.hook.RuntimeLogStore
+import cn.himpqblog.slience.settings.SettingsStore
 import com.topjohnwu.superuser.Shell
 import java.io.BufferedReader
 import java.io.BufferedWriter
@@ -14,11 +15,14 @@ import java.io.File
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.util.Locale
+import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.Executors
 import kotlin.math.max
 
 object ProcessInspector {
+    private const val ENABLE_IPC_LOG = false
 
     private const val FAST_LIST_PROCESS_CMD =
         """ps -A | grep 'u0_' | awk '{print ${'$'}2 "|" ${'$'}9}'"""
@@ -33,7 +37,7 @@ object ProcessInspector {
     private const val PROC_SAMPLE_CMD =
         "for d in /proc/[0-9]*; do pid=${'$'}{d##*/}; [ -r \"${'$'}d/cmdline\" ] || continue; cmd=${'$'}(tr '\\000' ' ' < \"${'$'}d/cmdline\"); [ -n \"${'$'}cmd\" ] && echo \"${'$'}pid|${'$'}cmd\"; done"
     private const val ROOT_PROC_SNAPSHOT_CMD =
-        """read -r _ user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat; total=${'$'}((user + nice + system + idle + iowait + irq + softirq + steal + guest + guest_nice)); echo "TOTAL|${'$'}total"; for d in /proc/[0-9]*; do pid=${'$'}{d##*/}; [ -r "${'$'}d/status" ] || continue; uid=""; rss=0; while IFS=" 	" read -r key value _; do case "${'$'}key" in Uid:) uid=${'$'}value ;; VmRSS:) rss=${'$'}value ;; esac; done < "${'$'}d/status"; [ -z "${'$'}uid" ] && continue; [ "${'$'}uid" -lt 10000 ] && continue; proc=""; if [ -r "${'$'}d/cmdline" ]; then proc=${'$'}(tr "\000" " " < "${'$'}d/cmdline"); fi; if [ -z "${'$'}proc" ] && [ -r "${'$'}d/comm" ]; then proc=${'$'}(cat "${'$'}d/comm"); fi; [ -z "${'$'}proc" ] && continue; proc=${'$'}{proc%% *}; [ -z "${'$'}proc" ] && continue; ticks=0; if [ -r "${'$'}d/stat" ]; then stat_line=${'$'}(cat "${'$'}d/stat"); stat_tail=${'$'}{stat_line##*) }; set -- ${'$'}stat_tail; if [ ${'$'}# -ge 13 ]; then ticks=${'$'}(( ${'$'}12 + ${'$'}13 )); fi; fi; echo "${'$'}pid|${'$'}uid|${'$'}rss|${'$'}ticks|${'$'}proc"; done"""
+        """read -r _ user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat; total=${'$'}((user + nice + system + idle + iowait + irq + softirq + steal + guest + guest_nice)); echo "TOTAL|${'$'}total"; for d in /proc/[0-9]*; do pid=${'$'}{d##*/}; [ -r "${'$'}d/status" ] || continue; uid=""; rss=0; while IFS=" 	" read -r key value _; do case "${'$'}key" in Uid:) uid=${'$'}value ;; VmRSS:) rss=${'$'}value ;; esac; done < "${'$'}d/status"; [ -z "${'$'}uid" ] && continue; [ "${'$'}uid" -lt 10000 ] && continue; proc=""; if [ -r "${'$'}d/comm" ]; then read -r proc < "${'$'}d/comm"; fi; [ -z "${'$'}proc" ] && continue; ticks=0; if [ -r "${'$'}d/stat" ]; then read -r stat_line < "${'$'}d/stat"; stat_tail=${'$'}{stat_line##*) }; set -- ${'$'}stat_tail; if [ ${'$'}# -ge 13 ]; then ticks=${'$'}(( ${'$'}12 + ${'$'}13 )); fi; fi; echo "${'$'}pid|${'$'}uid|${'$'}rss|${'$'}ticks|${'$'}proc"; done"""
     private const val CGROUP_FREEZE_BASE = "/sys/fs/cgroup/apps"
 
     private val cpuCoreCount = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
@@ -44,6 +48,7 @@ object ProcessInspector {
     private val uidTrafficCache = ConcurrentHashMap<Int, TrafficCounter>()
     private val probeRunning = AtomicBoolean(false)
     private val rawSuLock = Any()
+    private val processResolveExecutor = Executors.newFixedThreadPool(max(2, cpuCoreCount.coerceAtMost(4)))
     private const val ROOT_CHECK_CACHE_MS = 15_000L
     private const val PROCESS_LOG_THROTTLE_MS = 5_000L
 
@@ -61,6 +66,9 @@ object ProcessInspector {
 
     @Volatile
     private var processCommandsRequireRawSu: Boolean = false
+
+    @Volatile
+    private var processDebugLogEnabled: Boolean = false
 
     private data class ExecResult(
         val out: List<String>,
@@ -83,13 +91,30 @@ object ProcessInspector {
             return false
         }
         val entries = collectEntriesForPackage(shell, uid, packageName)
+        if (entries.isEmpty() && !freeze) {
+            val uidOnlyResult = shell.newJob()
+                .add("""writes=0; uid_file="$CGROUP_FREEZE_BASE/uid_${uid}/cgroup.freeze"; if [ -w "${'$'}uid_file" ]; then echo 0 > "${'$'}uid_file" && writes=${'$'}((writes+1)); fi; echo "writes|${'$'}writes" """)
+                .exec()
+            val uidOnlyWrites = uidOnlyResult.out.firstOrNull { it.startsWith("writes|") }
+                ?.substringAfter("writes|")
+                ?.toIntOrNull()
+                ?: 0
+            val uidOnlySuccess = uidOnlyResult.isSuccess && uidOnlyWrites > 0
+            if (uidOnlySuccess) {
+                silenceManagedFrozenPackages.remove(packageName)
+                syncRuntimeMirrorIfPossible(context)
+                return true
+            }
+        }
         if (entries.isEmpty()) {
-            RuntimeLogStore.appendDiagnostic(
-                source = "ipc",
-                message = "applyFreezeCommand entries empty package=$packageName uid=$uid",
-                throttleKey = "ipc_entries_empty_$packageName",
-                throttleMs = 3000L
-            )
+            if (ENABLE_IPC_LOG) {
+                RuntimeLogStore.appendDiagnostic(
+                    source = "ipc",
+                    message = "applyFreezeCommand entries empty package=$packageName uid=$uid",
+                    throttleKey = "ipc_entries_empty_$packageName",
+                    throttleMs = 3000L
+                )
+            }
             return false
         }
         val item = ProcessAppItem(
@@ -124,12 +149,14 @@ object ProcessInspector {
                 silenceManagedFrozenPackages.remove(packageName)
             }
         }
-        RuntimeLogStore.appendDiagnostic(
-            source = "ipc",
-            message = "applyFreezeCommand package=$packageName freeze=$freeze wrote=$wrote exit=${result.code}",
-            throttleKey = "ipc_apply_$packageName",
-            throttleMs = 0L
-        )
+        if (ENABLE_IPC_LOG) {
+            RuntimeLogStore.appendDiagnostic(
+                source = "ipc",
+                message = "applyFreezeCommand package=$packageName freeze=$freeze wrote=$wrote exit=${result.code}",
+                throttleKey = "ipc_apply_$packageName",
+                throttleMs = 0L
+            )
+        }
         if (success) {
             syncRuntimeMirrorIfPossible(context)
         }
@@ -145,13 +172,16 @@ object ProcessInspector {
     }
 
     fun collect(context: Context, previous: CpuSnapshot?): ProcessCollectResult {
+        processDebugLogEnabled = SettingsStore.isProcessDebugLogEnabled(context)
         val collectStart = SystemClock.elapsedRealtime()
-        RuntimeLogStore.appendDiagnostic(
-            "process-enter",
-            "collect invoked previous=${if (previous == null) "null" else "present"}",
-            "process_collect_enter",
-            PROCESS_LOG_THROTTLE_MS
-        )
+        if (processDebugLogEnabled) {
+            RuntimeLogStore.appendDiagnostic(
+                "process-enter",
+                "collect invoked previous=${if (previous == null) "null" else "present"}",
+                "process_collect_enter",
+                PROCESS_LOG_THROTTLE_MS
+            )
+        }
         val shell = runCatching { Shell.getShell() }.getOrElse { err ->
             RuntimeLogStore.appendDiagnostic(
                 "process-enter",
@@ -194,6 +224,8 @@ object ProcessInspector {
             )
         }
 
+        collectFromRootProcSnapshot(context, shell, previous)?.let { return it }
+
         val listStart = SystemClock.elapsedRealtime()
         val listResult = execProcessCommand(
             shell = shell,
@@ -203,8 +235,9 @@ object ProcessInspector {
             displayCommand = FAST_LIST_PROCESS_NAMES_ONLY_CMD
         )
         val listCost = SystemClock.elapsedRealtime() - listStart
-        if (!listResult.isSuccess) {
+        if (!listResult.isSuccess || listResult.out.isEmpty()) {
             logPerf("collect", "list=${listCost}ms total=${SystemClock.elapsedRealtime() - collectStart}ms failed=list")
+            collectFromRootProcSnapshot(context, shell, previous)?.let { return it }
             return ProcessCollectResult(
                 items = emptyList(),
                 snapshot = null,
@@ -213,19 +246,23 @@ object ProcessInspector {
         }
 
         val candidateProcesses = parseFastProcessList(listResult.out)
-        RuntimeLogStore.appendDiagnostic(
-            "process",
-            "list-lines=${listResult.out.size} candidates=${candidateProcesses.size}",
-            "process_candidates",
-            PROCESS_LOG_THROTTLE_MS
-        )
-        if (candidateProcesses.isEmpty()) {
+        if (processDebugLogEnabled) {
             RuntimeLogStore.appendDiagnostic(
-                "process-enter",
-                "candidateProcesses empty, trying fallback collectors",
-                "process_collect_empty_candidates",
+                "process",
+                "list-lines=${listResult.out.size} candidates=${candidateProcesses.size}",
+                "process_candidates",
                 PROCESS_LOG_THROTTLE_MS
             )
+        }
+        if (candidateProcesses.isEmpty()) {
+            if (processDebugLogEnabled) {
+                RuntimeLogStore.appendDiagnostic(
+                    "process-enter",
+                    "candidateProcesses empty, trying fallback collectors",
+                    "process_collect_empty_candidates",
+                    PROCESS_LOG_THROTTLE_MS
+                )
+            }
             val rootFallbackStart = SystemClock.elapsedRealtime()
             collectFromRootProcSnapshot(context, shell, previous)?.let {
                 logPerf(
@@ -235,12 +272,14 @@ object ProcessInspector {
                 return it
             }
             val javaProcCandidates = collectJavaProcProcesses()
-            RuntimeLogStore.appendDiagnostic(
-                "process",
-                "java-proc candidates=${javaProcCandidates.size}",
-                "process_java_proc_candidates",
-                PROCESS_LOG_THROTTLE_MS
-            )
+            if (processDebugLogEnabled) {
+                RuntimeLogStore.appendDiagnostic(
+                    "process",
+                    "java-proc candidates=${javaProcCandidates.size}",
+                    "process_java_proc_candidates",
+                    PROCESS_LOG_THROTTLE_MS
+                )
+            }
             if (javaProcCandidates.isNotEmpty()) {
                 return buildResultFromSeeds(
                     context = context,
@@ -401,37 +440,47 @@ object ProcessInspector {
         return success
     }
 
-    fun inspectRuntimeState(item: ProcessAppItem): AppRuntimeState {
-        val shell = runCatching { Shell.getShell() }.getOrNull()
-            ?: return AppRuntimeState(false, false, false)
+    fun inspectRuntimeState(context: Context, item: ProcessAppItem): AppRuntimeState {
+        val shell = runCatching { Shell.getShell() }.getOrNull() ?: return AppRuntimeState(false, false, false)
         val result = execProcessCommand(
             shell = shell,
             source = "process-cmd",
             command = buildRuntimeStateCommand(item),
-            throttleKey = "process_runtime_state_${item.packageName}",
+            throttleKey = "runtime_state_${item.packageName}",
             displayCommand = "runtime state for ${item.packageName}"
         )
+        val foregroundPackage = FreezeListStore.readForegroundState(context)?.packageName
+        val isForeground = foregroundPackage == item.packageName
         if (!result.isSuccess) {
-            return AppRuntimeState(false, false, false)
+            return AppRuntimeState(false, false, isForeground, isForeground)
         }
+
         var audio = false
-        var network = false
         var visible = false
         var networkUid: Int? = null
-        result.out.forEach { line ->
-            val parts = line.trim().split('|')
-            if (parts.size < 2) return@forEach
-            when (parts[0]) {
-                "audio" -> audio = parts[1] == "1"
-                "network" -> network = parts[1] == "1"
-                "network_uid" -> networkUid = parts[1].toIntOrNull()
-                "visible" -> visible = parts[1] == "1"
+        result.out.forEach { raw ->
+            val line = raw.trim()
+            when {
+                line.startsWith("audio|") -> {
+                    audio = line.substringAfter("audio|").trim() == "1"
+                }
+
+                line.startsWith("visible|") -> {
+                    visible = line.substringAfter("visible|").trim() == "1"
+                }
+
+                line.startsWith("network_uid|") -> {
+                    networkUid = line.substringAfter("network_uid|").trim().toIntOrNull()
+                }
             }
         }
-        if (networkUid != null) {
-            network = hasUidTrafficDelta(shell, networkUid!!)
-        }
-        return AppRuntimeState(audio, network, visible)
+        val network = networkUid?.let { hasUidTrafficDelta(shell, it) } ?: false
+        return AppRuntimeState(
+            isAudioActive = audio,
+            isNetworkActive = network,
+            isVisible = visible || isForeground,
+            isForeground = isForeground
+        )
     }
 
     private fun buildProcessItems(
@@ -526,16 +575,35 @@ object ProcessInspector {
     private fun buildFreezeToggleCommandForTarget(item: ProcessAppItem, frozen: Boolean, targetNames: Set<String>): String {
         val state = if (frozen) 1 else 0
         val pidList = resolveTargetEntries(item, targetNames).joinToString(" ") { it.pid.toString() }
-        return """writes=0; uid_file="$CGROUP_FREEZE_BASE/uid_${item.uid}/cgroup.freeze"; for pid in $pidList; do pid_file="$CGROUP_FREEZE_BASE/uid_${item.uid}/pid_${'$'}pid/cgroup.freeze"; if [ -w "${'$'}pid_file" ]; then echo $state > "${'$'}pid_file" && writes=${'$'}((writes+1)); fi; done; if [ "${'$'}writes" -eq 0 ] && [ -w "${'$'}uid_file" ]; then echo $state > "${'$'}uid_file" && writes=${'$'}((writes+1)); elif [ $state -eq 0 ] && [ -w "${'$'}uid_file" ]; then echo 0 > "${'$'}uid_file" && writes=${'$'}((writes+1)); fi; echo "writes|${'$'}writes" """
+        return """writes=0; uid_file="$CGROUP_FREEZE_BASE/uid_${item.uid}/cgroup.freeze"; for pid in $pidList; do pid_file="$CGROUP_FREEZE_BASE/uid_${item.uid}/pid_${'$'}pid/cgroup.freeze"; if [ -w "${'$'}pid_file" ]; then echo $state > "${'$'}pid_file" && writes=${'$'}((writes+1)); fi; done; if [ $state -eq 0 ] && [ -w "${'$'}uid_file" ]; then echo 0 > "${'$'}uid_file" && writes=${'$'}((writes+1)); fi; echo "writes|${'$'}writes" """
     }
 
     private fun collectEntriesForPackage(shell: Shell, uid: Int, packageName: String): List<ProcessEntry> {
-        val command = """ps -A -o PID,UID,NAME 2>/dev/null | awk '$2==$uid {print $1 "|" $3}'"""
+        val command = """
+            for d in /proc/[0-9]*; do
+              pid=${'$'}{d##*/}
+              status="${'$'}d/status"
+              [ -r "${'$'}status" ] || continue
+              proc_uid=""
+              while IFS=" 	" read -r key value _; do
+                case "${'$'}key" in
+                  Uid:) proc_uid=${'$'}value; break ;;
+                esac
+              done < "${'$'}status"
+              [ "${'$'}proc_uid" = "$uid" ] || continue
+              proc=""
+              if [ -r "${'$'}d/comm" ]; then
+                read -r proc < "${'$'}d/comm"
+              fi
+              [ -z "${'$'}proc" ] && continue
+              echo "${'$'}pid|${'$'}proc"
+            done
+        """.trimIndent()
         val result = execProcessCommand(
             shell = shell,
-            source = "ipc-cmd",
+            source = if (ENABLE_IPC_LOG) "ipc-cmd" else "ipc-cmd-muted",
             command = command,
-            throttleKey = "ipc_collect_$packageName",
+            throttleKey = if (ENABLE_IPC_LOG) "ipc_collect_$packageName" else "ipc_collect_muted_$packageName",
             displayCommand = "collect entries for $packageName uid=$uid"
         )
         if (!result.isSuccess) {
@@ -812,12 +880,17 @@ object ProcessInspector {
             }.toMap()
         )
         val resolveStart = SystemClock.elapsedRealtime()
-        val rows = seeds.mapNotNull { process ->
+        val rows = resolveRowsParallel(seeds) { process ->
             val metric = metrics?.byPid?.get(process.pid)
-            val meta = resolveAppMetaForProcess(pm, shell, process.basePackage, metric?.uid)
-                ?: return@mapNotNull null
+            val packageHint = metric?.uid?.let { uid ->
+                runCatching {
+                    pm.getPackagesForUid(uid)?.firstOrNull()
+                }.getOrNull()
+            } ?: process.basePackage
+            val meta = resolveAppMetaForProcess(pm, shell, packageHint, metric?.uid)
+                ?: return@resolveRowsParallel null
             if (meta.isSystemApp) {
-                return@mapNotNull null
+                return@resolveRowsParallel null
             }
 
             ResolvedProcessRow(
@@ -906,11 +979,15 @@ object ProcessInspector {
             parsed.rows.associate { it.pid to it.uid }
         )
         val resolveStart = SystemClock.elapsedRealtime()
-        val rows = parsed.rows.mapNotNull { process ->
-            val meta = resolveAppMetaForProcess(pm, shell, process.basePackage, process.uid)
-                ?: return@mapNotNull null
+        val rows = resolveRowsParallel(parsed.rows) { process ->
+            val packageHint = runCatching {
+                pm.getPackagesForUid(process.uid)
+                    ?.firstOrNull()
+            }.getOrNull() ?: process.basePackage
+            val meta = resolveAppMetaForProcess(pm, shell, packageHint, process.uid)
+                ?: return@resolveRowsParallel null
             if (meta.isSystemApp) {
-                return@mapNotNull null
+                return@resolveRowsParallel null
             }
 
             ResolvedProcessRow(
@@ -1210,12 +1287,14 @@ object ProcessInspector {
                 isSuccess = false,
                 code = -1
             )
-            RuntimeLogStore.appendDiagnostic(
-                source = source,
-                message = "raw-su cached for $displayCommand => stdoutLines=${rawResult.out.size} stderrLines=${rawResult.err.size} exitCode=${rawResult.code}",
-                throttleKey = "${throttleKey}_raw_cached",
-                throttleMs = PROCESS_LOG_THROTTLE_MS
-            )
+            if (!source.endsWith("-muted")) {
+                RuntimeLogStore.appendDiagnostic(
+                    source = source,
+                    message = "raw-su cached for $displayCommand => stdoutLines=${rawResult.out.size} stderrLines=${rawResult.err.size} exitCode=${rawResult.code}",
+                    throttleKey = "${throttleKey}_raw_cached",
+                    throttleMs = PROCESS_LOG_THROTTLE_MS
+                )
+            }
             return rawResult
         }
 
@@ -1240,12 +1319,14 @@ object ProcessInspector {
 
         if (libsuResult.isSuccess && libsuResult.out.isEmpty() && libsuResult.err.isEmpty()) {
             processCommandsRequireRawSu = true
-            RuntimeLogStore.appendDiagnostic(
-                source,
-                "switching process commands to raw-su for $displayCommand",
-                "${throttleKey}_switch_raw",
-                PROCESS_LOG_THROTTLE_MS
-            )
+            if (!source.endsWith("-muted")) {
+                RuntimeLogStore.appendDiagnostic(
+                    source,
+                    "switching process commands to raw-su for $displayCommand",
+                    "${throttleKey}_switch_raw",
+                    PROCESS_LOG_THROTTLE_MS
+                )
+            }
         }
 
         val rawResult = execRawSu(command) ?: return ExecResult(
@@ -1337,8 +1418,14 @@ object ProcessInspector {
         exitCode: Int,
         throttleKey: String
     ) {
+        if (!processDebugLogEnabled) {
+            return
+        }
         val hasOutput = outputLines.isNotEmpty() || errorLines.isNotEmpty()
         val isFailure = !success || exitCode != 0
+        if (source.endsWith("-muted")) {
+            return
+        }
         if (isFailure) {
             RuntimeLogStore.appendDiagnostic(
                 source,
@@ -1361,6 +1448,9 @@ object ProcessInspector {
     }
 
     private fun logPerf(stage: String, message: String) {
+        if (!processDebugLogEnabled) {
+            return
+        }
         RuntimeLogStore.appendDiagnostic(
             "process-perf",
             "$stage $message",
@@ -1382,6 +1472,19 @@ object ProcessInspector {
                 append(" more lines>")
             }
         }
+    }
+
+    private fun <T> resolveRowsParallel(
+        sources: List<T>,
+        resolver: (T) -> ResolvedProcessRow?
+    ): List<ResolvedProcessRow> {
+        if (sources.isEmpty()) {
+            return emptyList()
+        }
+        val futures = processResolveExecutor.invokeAll(
+            sources.map { source -> Callable { resolver(source) } }
+        )
+        return futures.mapNotNull { future -> runCatching { future.get() }.getOrNull() }
     }
 
     private fun parseRootProcSnapshot(lines: List<String>): RootProcSnapshot {
