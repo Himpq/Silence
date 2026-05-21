@@ -105,11 +105,13 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         private var freezeRules: Map<String, FreezeRule> = emptyMap()
     }
 
+    // Zygote 阶段先记住模块 apk 路径，后面 system_server 里要靠它读取内置规则文件。
     override fun initZygote(startupParam: IXposedHookZygoteInit.StartupParam) {
         moduleApkPath = startupParam.modulePath
         XposedBridge.log("$TAG initZygote: modulePath=${startupParam.modulePath}")
     }
 
+    // 这是 Hook 总入口：只在 android/system_server 进程里装载冻结、前台和交互相关 Hook。
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         if (lpparam.packageName != TARGET_PACKAGE) {
             return
@@ -165,6 +167,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
+    // 冻结规则只加载一次，优先读运行时配置，读不到再回退到模块内置资产。
     private fun ensureFreezeRulesLoaded() {
         if (!freezeRulesLoaded.compareAndSet(false, true)) {
             return
@@ -174,6 +177,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         logHookDebug("freeze rules loaded apps=${freezeRules.size}")
     }
 
+    // 内置规则是最后回退来源，用来保证首次启动或运行时文件损坏时仍然能工作。
     private fun loadFreezeRulesFromAsset(): Map<String, FreezeRule> {
         loadFreezeRulesFromRuntimeFile()?.let { return it }
 
@@ -205,6 +209,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }.getOrDefault(emptyMap())
     }
 
+    // 运行时规则同时合并主文件和镜像文件，优先保证 Hook 进程能读到最新配置。
     private fun loadFreezeRulesFromRuntimeFile(): Map<String, FreezeRule>? {
         loadFreezeRulesFromGlobalSettings()?.let { return it }
 
@@ -239,6 +244,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return mergedRules
     }
 
+    // GlobalSettings 是最早可读的兜底同步源，主要服务 system_server 热更新场景。
     private fun loadFreezeRulesFromGlobalSettings(): Map<String, FreezeRule>? {
         val encoded = readGlobalSetting(FreezeListStore.runtimeGlobalRulesKey()).trim()
         if (encoded.isEmpty() || encoded == "null") {
@@ -270,6 +276,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }.getOrNull()
     }
 
+    // 规则解析时会强制补上 Silence 自己的白名单，避免误冻自身。
     private fun parseFreezeRules(rawJson: String): Map<String, FreezeRule> {
         val result = linkedMapOf<String, FreezeRule>()
         runCatching {
@@ -310,6 +317,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return list
     }
 
+    // 如果当前 classLoader 装不上核心 Hook，就延迟到 ActivityThread.systemMain 再补挂一次。
     private fun deferHookToSystemClassLoader(classLoader: ClassLoader, processName: String) {
         runCatching {
             XposedHelpers.findAndHookMethod(
@@ -345,6 +353,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
+    // system context 只要成功拿到一次，后面 IPC、Settings 和广播都靠它完成。
     private fun ensureSystemContext(classLoader: ClassLoader) {
         if (appContext != null) return
         runCatching {
@@ -355,6 +364,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
+    // 把当前进程需要的进程态、ATMS 和亮灭屏 Hook 一次性装好并返回装载数量。
     private fun installHooksForProcess(classLoader: ClassLoader, processName: String): Int {
         var totalHooks = 0
 
@@ -374,6 +384,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return totalHooks
     }
 
+    // ATMS Hook 负责感知应用切前台、切后台，是冻结和性能调控共享的核心信号源。
     private fun installAtmsHooks(classLoader: ClassLoader): Int {
         val atmsClass = runCatching {
             XposedHelpers.findClass("com.android.server.wm.ActivityTaskManagerService", classLoader)
@@ -410,6 +421,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return hookedCount
     }
 
+    // 亮屏、灭屏等交互信号单独挂在 PhoneWindowManager 上，给调控和冻结做补充触发。
     private fun installInteractionHooks(classLoader: ClassLoader): Int {
         val pwmClass = runCatching {
             XposedHelpers.findClass("com.android.server.policy.PhoneWindowManager", classLoader)
@@ -448,11 +460,19 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return hookedCount
     }
 
+    // 交互事件到来后先尝试更新前台包，再主动触发一次轮询兜底。
     private fun handleInteractionSignal(source: String, pwm: Any?, waking: Boolean) {
+        if (!isHookEnabled()) {
+            return
+        }
         logHookDebug("interaction $source waking=$waking")
         if (waking) {
             resolveTopResumedPackageNameFromPolicy(pwm)?.let { packageName ->
-                markTopResumedPackage(packageName, "$source#policy", publishForegroundState = true)
+                markTopResumedPackage(
+                    packageName,
+                    "$source#policy",
+                    publishForegroundState = isPerformanceHookEnabled()
+                )
             }
         }
         pollScheduler.execute {
@@ -473,12 +493,16 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return resolveTopResumedPackageName(atms)
     }
 
+    // ATMS 回调会把原始参数统一折叠成“某包进入前台/后台”这一层状态信号。
     private fun handleAtmsSignal(
         source: String,
         atmsService: Any?,
         args: Array<Any?>,
         movedToBackground: Boolean
     ) {
+        if (!isHookEnabled()) {
+            return
+        }
         if (atmsService != null) {
             lastAtmsService = atmsService
         }
@@ -505,9 +529,13 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             }
         }
         if (clearedTopPackage) {
-            publishForegroundPackage(null, "$source#cleared")
+            if (isPerformanceHookEnabled()) {
+                publishForegroundPackage(null, "$source#cleared")
+            }
         } else if (!movedToBackground) {
-            publishForegroundPackage(packageName, "$source#foreground")
+            if (isPerformanceHookEnabled()) {
+                publishForegroundPackage(packageName, "$source#foreground")
+            }
         }
         signalPackageState(packageName, movedToBackground, source)
     }
@@ -516,6 +544,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         markTopResumedPackage(packageName, source, publishForegroundState = true)
     }
 
+    // 当前台包真正变化时，同时更新顶部缓存，并按需要向 app 侧发布前台状态。
     private fun markTopResumedPackage(
         packageName: String,
         source: String,
@@ -882,7 +911,11 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
+    // 这里是前后台信号聚合器：前台可立即解冻，后台则进入稳定窗口后再决定是否冻结。
     private fun signalPackageState(packageName: String, movedToBackground: Boolean, source: String) {
+        if (!isHookEnabled() || !isFreezeHookEnabled()) {
+            return
+        }
         val normalized = packageName.trim()
         if (!isLikelyPackageName(normalized)) {
             return
@@ -936,6 +969,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }, STABLE_STATE_WINDOW_MS, TimeUnit.MILLISECONDS)
     }
 
+    // 真正的冻结提交入口，会在下发前把白名单、前台、保护窗口和规则条件全部再校验一遍。
     private fun commitBackgroundState(packageName: String, source: String): Boolean {
         val fromPoll = source.startsWith("poll:")
         if (packageDesiredBackground[packageName] == false && !fromPoll) {
@@ -972,6 +1006,16 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             logCommitAbort(packageName, source, "白名单")
             return false
         }
+        val topResumedNow = resolveTopResumedPackageName(lastAtmsService)
+        if (!topResumedNow.isNullOrBlank()) {
+            synchronized(packageStateLock) {
+                markTopResumedPackageLocked(topResumedNow)
+            }
+            if (topResumedNow == packageName) {
+                logCommitAbort(packageName, source, "topResumed复核前台")
+                return false
+            }
+        }
         dispatchFreezeCommandIpc(packageName, freeze = true, rule = rule, source = source)
         packageLastFreezeDispatchAt[packageName] = now
         frozenPackages.add(packageName)
@@ -993,6 +1037,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return true
     }
 
+    // 真正的解冻提交入口：前台一旦确认就立即写前台状态并下发解冻 IPC。
     private fun commitForegroundState(packageName: String, source: String) {
         packageLaunchProtectUntil[packageName] = System.currentTimeMillis() + FOREGROUND_RETURN_PROTECT_MS
         packageDesiredBackground[packageName] = false
@@ -1014,6 +1059,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
+    // 轮询只启动一次，主要负责兜底那些没被 Hook 事件及时覆盖到的状态变化。
     private fun startBackgroundPollIfNeeded() {
         if (!pollStarted.compareAndSet(false, true)) {
             return
@@ -1023,6 +1069,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         scheduleNextPoll(10L)
     }
 
+    // 每次轮询结束后根据最新设置重新计算下次间隔，支持动态改 Hook 轮询时间。
     private fun scheduleNextPoll(delayMs: Long) {
         val safeDelay = delayMs.coerceAtLeast(10_000L)
         pollFuture = pollScheduler.schedule({
@@ -1070,12 +1117,19 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
+    // 轮询链会重新扫描规则命中的应用，并尝试把真正该冻的后台应用补冻上。
     private fun runBackgroundPoll() {
         if (!isHookEnabled()) {
             logHookDebug("hook disabled, skip poll")
             return
         }
-        refreshTopResumedPackage("poll")
+        if (isPerformanceHookEnabled()) {
+            refreshTopResumedPackage("poll")
+        }
+        if (!isFreezeHookEnabled()) {
+            logHookDebug("freeze hook disabled, skip freeze poll")
+            return
+        }
         synchronized(packageStateLock) {
             pruneForegroundTrackingLocked()
         }
@@ -1177,8 +1231,21 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }.getOrDefault("")
     }
 
+    // 总 Hook 开关只控制逻辑执行，不影响 LSPosed 注入本身。
     private fun isHookEnabled(): Boolean {
         val value = readGlobalSetting(FreezeListStore.runtimeGlobalHookEnabledKey()).trim()
+        return value != "0" && !value.equals("false", ignoreCase = true)
+    }
+
+    // 冻结 Hook 开关只影响冻结链，前台跟踪和调控信号可以独立保留。
+    private fun isFreezeHookEnabled(): Boolean {
+        val value = readGlobalSetting(FreezeListStore.runtimeGlobalFreezeHookEnabledKey()).trim()
+        return value != "0" && !value.equals("false", ignoreCase = true)
+    }
+
+    // 调控 Hook 开关主要决定是否继续发布前台/亮灭屏等调控信号。
+    private fun isPerformanceHookEnabled(): Boolean {
+        val value = readGlobalSetting(FreezeListStore.runtimeGlobalPerformanceHookEnabledKey()).trim()
         return value != "0" && !value.equals("false", ignoreCase = true)
     }
 
@@ -1187,11 +1254,18 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return value == "1" || value.equals("true", ignoreCase = true)
     }
 
+    // 冻结判定统一集中在这里，方便把“前台/可见/音频/网络/保护窗口”规则一次说清。
     private fun evaluateFreezeDecision(packageName: String, rule: FreezeRule): FreezeDecision {
         if (!isHookEnabled()) {
             return FreezeDecision(
                 shouldFreeze = false,
                 reason = "Hook关闭"
+            )
+        }
+        if (!isFreezeHookEnabled()) {
+            return FreezeDecision(
+                shouldFreeze = false,
+                reason = "冻结Hook关闭"
             )
         }
         if (rule.whitelist) {
@@ -1286,16 +1360,24 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return uidState != null && uidState <= PROCESS_STATE_VISIBLE_THRESHOLD
     }
 
+    // 某些场景下我们只知道“该刷新前台了”，这里负责重新向系统追问当前 top app。
     private fun refreshTopResumedPackage(source: String) {
+        if (!isHookEnabled()) {
+            return
+        }
         val packageName = resolveTopResumedPackageName(lastAtmsService)
         if (packageName.isNullOrBlank()) {
             logHookDebug("top resumed unresolved source=$source")
             return
         }
-        markTopResumedPackage(packageName, source, publishForegroundState = true)
+        markTopResumedPackage(packageName, source, publishForegroundState = isPerformanceHookEnabled())
     }
 
+    // 前台状态会同时写到 GlobalSettings 并广播给 app 侧，保证通知和页面都能同步。
     private fun publishForegroundPackage(packageName: String?, source: String) {
+        if (!isHookEnabled() || !isPerformanceHookEnabled()) {
+            return
+        }
         val context = appContext ?: return
         val normalized = packageName?.trim().orEmpty()
         runCatching {
@@ -1496,6 +1578,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }.getOrDefault(false)
     }
 
+    // cgroup 实际写入在这里完成，会先把规则里的目标进程筛出来再逐个写 freeze 状态。
     private fun writeFreezeStateForPackage(
         packageName: String,
         rule: FreezeRule?,
@@ -1559,6 +1642,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         )
     }
 
+    // 冻结目标需要先按 UID 展开到具体子进程，这里按多种 ps/proc 方式依次尝试。
     private fun listUidChildProcesses(uid: Int): List<UidProcessRow> {
         parseUidProcessesFromPs(
             uid = uid,
@@ -1624,6 +1708,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return null
     }
 
+    // cgroup 写入会依次尝试普通 shell、su 和 magisk su，尽量提高写成功率。
     private fun writeCgroupValue(path: String, value: String): Boolean {
         val escapedPath = path.replace("\"", "\\\"")
         val command = "echo $value > \"$escapedPath\""
@@ -1636,6 +1721,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return runShellExitCode("/system/bin/magisk su -c '$command'") == 0
     }
 
+    // system_server 侧真正通知 app 执行冻结/解冻命令的出口在这里。
     private fun dispatchFreezeCommandIpc(
         packageName: String,
         freeze: Boolean,

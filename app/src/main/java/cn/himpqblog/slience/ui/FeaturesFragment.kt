@@ -17,6 +17,9 @@ import cn.himpqblog.slience.R
 import cn.himpqblog.slience.config.FreezeListStore
 import cn.himpqblog.slience.databinding.FragmentFeaturesBinding
 import cn.himpqblog.slience.notification.PersistentStatusNotificationService
+import cn.himpqblog.slience.perf.PerformanceExternalModeWriter
+import cn.himpqblog.slience.perf.PerformanceLogStore
+import cn.himpqblog.slience.perf.PerformanceRecordingScheduler
 import cn.himpqblog.slience.settings.SettingsStore
 
 class FeaturesFragment : Fragment() {
@@ -44,6 +47,7 @@ class FeaturesFragment : Fragment() {
         Toast.makeText(context, R.string.settings_notification_permission_denied, Toast.LENGTH_SHORT).show()
     }
 
+    // 设置页本身不做业务计算，这里只负责安全创建并持有视图绑定。
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -53,6 +57,7 @@ class FeaturesFragment : Fragment() {
         return binding.root
     }
 
+    // 设置页的所有开关、输入框和事件日志入口都在这里完成绑定。
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         val context = requireContext()
@@ -71,9 +76,19 @@ class FeaturesFragment : Fragment() {
             SettingsStore.getHookPollIntervalSeconds(context).toString()
         )
         binding.hookEnabledSwitch.isChecked = SettingsStore.isHookEnabled(context)
+        binding.freezeHookEnabledSwitch.isChecked = SettingsStore.isFreezeHookEnabled(context)
+        binding.performanceHookEnabledSwitch.isChecked = SettingsStore.isPerformanceHookEnabled(context)
         binding.processDebugLogSwitch.isChecked = SettingsStore.isProcessDebugLogEnabled(context)
         binding.foregroundDebugLogSwitch.isChecked = SettingsStore.isForegroundDebugLogEnabled(context)
         binding.persistentNotificationSwitch.isChecked = SettingsStore.isPersistentNotificationEnabled(context)
+        binding.powerRecordEnabledSwitch.isChecked = SettingsStore.isPowerRecordEnabled(context)
+        binding.powerRecordPollIntervalInput.setText(
+            SettingsStore.getPowerRecordPollIntervalSeconds(context).toString()
+        )
+        binding.externalModeEnabledSwitch.isChecked = SettingsStore.isExternalPerformanceModeEnabled(context)
+        binding.externalModePathInput.setText(
+            SettingsStore.getExternalPerformanceModePath(context)
+        )
         binding.processRefreshIntervalInput.hint = getString(cn.himpqblog.slience.R.string.settings_process_refresh_hint)
         binding.sortModeGroup.setOnCheckedChangeListener { _, checkedId ->
             val mode = when (checkedId) {
@@ -117,6 +132,14 @@ class FeaturesFragment : Fragment() {
             SettingsStore.setHookEnabled(context, isChecked)
             FreezeListStore.syncRuntimeMirror(context)
         }
+        binding.freezeHookEnabledSwitch.setOnCheckedChangeListener { _, isChecked ->
+            SettingsStore.setFreezeHookEnabled(context, isChecked)
+            FreezeListStore.syncRuntimeMirror(context)
+        }
+        binding.performanceHookEnabledSwitch.setOnCheckedChangeListener { _, isChecked ->
+            SettingsStore.setPerformanceHookEnabled(context, isChecked)
+            FreezeListStore.syncRuntimeMirror(context)
+        }
         binding.processDebugLogSwitch.setOnCheckedChangeListener { _, isChecked ->
             SettingsStore.setProcessDebugLogEnabled(context, isChecked)
             FreezeListStore.syncRuntimeMirror(context)
@@ -149,6 +172,95 @@ class FeaturesFragment : Fragment() {
             }
             PersistentStatusNotificationService.syncState(context)
         }
+        binding.powerRecordEnabledSwitch.setOnCheckedChangeListener { _, isChecked ->
+            val previous = SettingsStore.isPowerRecordEnabled(context)
+            SettingsStore.setPowerRecordEnabled(context, isChecked)
+            PerformanceRecordingScheduler.notifySettingsChanged(context)
+            if (previous != isChecked) {
+                PerformanceLogStore.recordEvent(
+                    context,
+                    eventName = "power_record_enabled_changed",
+                    oldValue = previous.toString(),
+                    newValue = isChecked.toString()
+                )
+            }
+        }
+        binding.powerRecordPollIntervalInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+
+            override fun afterTextChanged(s: Editable?) {
+                val value = s?.toString()?.toIntOrNull() ?: return
+                val previous = SettingsStore.getPowerRecordPollIntervalSeconds(context)
+                SettingsStore.setPowerRecordPollIntervalSeconds(context, value)
+                PerformanceRecordingScheduler.notifySettingsChanged(context)
+                if (previous != value) {
+                    PerformanceLogStore.recordEvent(
+                        context,
+                        eventName = "power_record_interval_changed",
+                        oldValue = previous.toString(),
+                        newValue = value.toString()
+                    )
+                }
+            }
+        })
+        binding.externalModeEnabledSwitch.setOnCheckedChangeListener { _, isChecked ->
+            val path = binding.externalModePathInput.text?.toString()?.trim().orEmpty()
+            val previous = SettingsStore.isExternalPerformanceModeEnabled(context)
+            val resolved = isChecked && path.isNotBlank()
+            SettingsStore.setExternalPerformanceModeEnabled(context, resolved)
+            if (resolved && SettingsStore.isPerformanceScheduleEnabled(context)) {
+                SettingsStore.setPerformanceScheduleEnabled(context, false)
+            }
+            if (resolved) {
+                PerformanceExternalModeWriter.syncCurrentMode(context)
+            } else {
+                PerformanceExternalModeWriter.resetCache()
+            }
+            if (previous != resolved) {
+                PerformanceLogStore.recordEvent(
+                    context,
+                    eventName = "external_mode_enabled_changed",
+                    oldValue = previous.toString(),
+                    newValue = resolved.toString(),
+                    detail = if (path.isBlank()) "path_empty_auto_disable" else null
+                )
+            }
+            if (isChecked != resolved) {
+                binding.externalModeEnabledSwitch.isChecked = resolved
+            }
+        }
+        binding.externalModePathInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+
+            override fun afterTextChanged(s: Editable?) {
+                val previous = SettingsStore.getExternalPerformanceModePath(context)
+                val newPath = s?.toString()?.trim().orEmpty()
+                if (previous == newPath) {
+                    return
+                }
+                SettingsStore.setExternalPerformanceModePath(context, newPath)
+                if (newPath.isBlank()) {
+                    if (SettingsStore.isExternalPerformanceModeEnabled(context)) {
+                        SettingsStore.setExternalPerformanceModeEnabled(context, false)
+                        binding.externalModeEnabledSwitch.isChecked = false
+                    }
+                    PerformanceExternalModeWriter.resetCache()
+                } else if (SettingsStore.isExternalPerformanceModeEnabled(context)) {
+                    PerformanceExternalModeWriter.resetCache()
+                    PerformanceExternalModeWriter.syncCurrentMode(context)
+                }
+                PerformanceLogStore.recordEvent(
+                    context,
+                    eventName = "external_mode_path_changed",
+                    oldValue = previous.ifBlank { "<empty>" },
+                    newValue = newPath.ifBlank { "<empty>" }
+                )
+            }
+        })
 
         if (binding.persistentNotificationSwitch.isChecked &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -158,6 +270,7 @@ class FeaturesFragment : Fragment() {
         }
     }
 
+    // 及时释放 binding，避免设置页反复切换后持有旧视图。
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null

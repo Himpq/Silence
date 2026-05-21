@@ -15,6 +15,7 @@ import cn.himpqblog.slience.databinding.ActivityMainBinding
 import cn.himpqblog.slience.ui.FeaturesFragment
 import cn.himpqblog.slience.ui.HomeFragment
 import cn.himpqblog.slience.ui.LogsFragment
+import cn.himpqblog.slience.ui.PerformanceFragment
 import cn.himpqblog.slience.ui.ProcessFragment
 
 class MainActivity : AppCompatActivity() {
@@ -25,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private val pageTitles by lazy {
         listOf(
             getString(R.string.page_home),
+            getString(R.string.page_performance),
             getString(R.string.page_process),
             getString(R.string.page_logs),
             getString(R.string.page_features)
@@ -126,14 +128,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyTopBarState(index: Int) {
         binding.pageTitle.text = pageTitles.getOrElse(index) { getString(R.string.page_home) }
-        binding.topToolbar.menu.findItem(R.id.action_clear_logs)?.isVisible = index == 2
-        binding.topToolbar.menu.findItem(R.id.action_copy_logs)?.isVisible = index == 2
+        binding.topToolbar.menu.findItem(R.id.action_clear_logs)?.isVisible = index == 3
+        binding.topToolbar.menu.findItem(R.id.action_copy_logs)?.isVisible = index == 3
         binding.topToolbar.post {
             val menuView = (0 until binding.topToolbar.childCount)
                 .map { binding.topToolbar.getChildAt(it) }
                 .filterIsInstance<ActionMenuView>()
                 .firstOrNull()
-            menuView?.translationY = if (index == 2) {
+            menuView?.translationY = if (index == 3) {
                 -resources.displayMetrics.density * 2f
             } else {
                 0f
@@ -148,9 +150,10 @@ class MainActivity : AppCompatActivity() {
     private fun createTabFragment(index: Int): Fragment {
         return when (index) {
             0 -> HomeFragment()
-            1 -> ProcessFragment()
-            2 -> LogsFragment()
-            3 -> FeaturesFragment()
+            1 -> PerformanceFragment()
+            2 -> ProcessFragment()
+            3 -> LogsFragment()
+            4 -> FeaturesFragment()
             else -> HomeFragment()
         }
     }
@@ -158,9 +161,10 @@ class MainActivity : AppCompatActivity() {
     private fun tabFromMenuId(menuId: Int): Int {
         return when (menuId) {
             R.id.nav_home -> 0
-            R.id.nav_process -> 1
-            R.id.nav_logs -> 2
-            R.id.nav_features -> 3
+            R.id.nav_performance -> 1
+            R.id.nav_process -> 2
+            R.id.nav_logs -> 3
+            R.id.nav_features -> 4
             else -> 0
         }
     }
@@ -168,9 +172,10 @@ class MainActivity : AppCompatActivity() {
     private fun tagFor(index: Int): String {
         return when (index) {
             0 -> "tab_home"
-            1 -> "tab_process"
-            2 -> "tab_logs"
-            3 -> "tab_features"
+            1 -> "tab_performance"
+            2 -> "tab_process"
+            3 -> "tab_logs"
+            4 -> "tab_features"
             else -> "tab_home"
         }
     }

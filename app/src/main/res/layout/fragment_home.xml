@@ -80,5 +80,6 @@
                     android:textColor="@color/text_primary" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
+
     </LinearLayout>
 </ScrollView>

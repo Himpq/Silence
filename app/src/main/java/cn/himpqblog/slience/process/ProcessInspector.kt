@@ -77,6 +77,7 @@ object ProcessInspector {
         val code: Int
     )
 
+    // IPC 过来的冻结命令最终都会落到这里，负责把“规则目标”翻译成真实进程写入。
     fun applyFreezeCommand(
         context: Context,
         packageName: String,
@@ -171,6 +172,7 @@ object ProcessInspector {
         }
     }
 
+    // 进程页主采集入口：这里统一抓进程、内存、CPU、冻结态和应用元信息。
     fun collect(context: Context, previous: CpuSnapshot?): ProcessCollectResult {
         processDebugLogEnabled = SettingsStore.isProcessDebugLogEnabled(context)
         val collectStart = SystemClock.elapsedRealtime()
@@ -393,6 +395,7 @@ object ProcessInspector {
         )
     }
 
+    // 手动冻结/解冻入口和 Hook 的批量冻结是两条链，这里只处理用户显式操作。
     fun toggleFreeze(item: ProcessAppItem, targetNames: Set<String> = emptySet()): Boolean {
         val targetFrozen = !item.isFrozen
         val command = buildFreezeToggleCommandForTarget(item, targetFrozen, targetNames)
@@ -440,6 +443,7 @@ object ProcessInspector {
         return success
     }
 
+    // 进程详情弹窗里的 AUDIO / NETWORK / VISIBLE 状态统一从这里即时探测。
     fun inspectRuntimeState(context: Context, item: ProcessAppItem): AppRuntimeState {
         val shell = runCatching { Shell.getShell() }.getOrNull() ?: return AppRuntimeState(false, false, false)
         val result = execProcessCommand(
@@ -483,6 +487,7 @@ object ProcessInspector {
         )
     }
 
+    // 原始采样会先在这里聚合成按应用分组的 UI 模型，后面列表层只做展示。
     private fun buildProcessItems(
         rows: List<ResolvedProcessRow>,
         previous: CpuSnapshot?,
@@ -945,6 +950,7 @@ object ProcessInspector {
         )
     }
 
+    // 快速路径优先走 /proc 全量快照，尽量把进程页首次打开延迟压到最低。
     private fun collectFromRootProcSnapshot(
         context: Context,
         shell: Shell,
@@ -1273,6 +1279,7 @@ object ProcessInspector {
         }.start()
     }
 
+    // 所有 root 命令统一从这里出，便于做性能日志、失败回退和 raw su 切换。
     private fun execProcessCommand(
         shell: Shell,
         source: String,
@@ -1344,6 +1351,7 @@ object ProcessInspector {
         return rawResult
     }
 
+    // 当 libsu 返回空输出时，会退回到持久 raw su 会话，避免某些机型拿不到 ps 结果。
     private fun execRawSu(command: String): ExecResult? {
         return runCatching {
             synchronized(rawSuLock) {
@@ -1383,6 +1391,7 @@ object ProcessInspector {
         }.getOrNull()
     }
 
+    // raw su 会话会被复用，减少频繁启动 su 进程带来的额外等待。
     private fun ensureRawSuSession(): Process? {
         val current = rawSuProcess
         if (current != null && current.isAlive && rawSuReader != null && rawSuWriter != null) {
@@ -1447,6 +1456,7 @@ object ProcessInspector {
         }
     }
 
+    // 进程页性能日志统一从这里打，方便后面专门分析列表刷新慢在哪个阶段。
     private fun logPerf(stage: String, message: String) {
         if (!processDebugLogEnabled) {
             return
@@ -1598,4 +1608,3 @@ object ProcessInspector {
         val txBytes: Long
     )
 }
-

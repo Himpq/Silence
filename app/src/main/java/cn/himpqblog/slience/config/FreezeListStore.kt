@@ -28,6 +28,8 @@ object FreezeListStore {
     private const val GLOBAL_RULES_KEY = "silence_freeze_rules_json_b64"
     private const val GLOBAL_HOOK_POLL_INTERVAL_KEY = "silence_hook_poll_interval_seconds"
     private const val GLOBAL_HOOK_ENABLED_KEY = "silence_hook_enabled"
+    private const val GLOBAL_FREEZE_HOOK_ENABLED_KEY = "silence_freeze_hook_enabled"
+    private const val GLOBAL_PERFORMANCE_HOOK_ENABLED_KEY = "silence_performance_hook_enabled"
     private const val GLOBAL_PROCESS_DEBUG_LOG_ENABLED_KEY = "silence_process_debug_log_enabled"
     private const val GLOBAL_FOREGROUND_PACKAGE_KEY = "silence_foreground_package"
     private const val GLOBAL_FOREGROUND_SOURCE_KEY = "silence_foreground_source"
@@ -64,6 +66,7 @@ object FreezeListStore {
         val updatedAt: Long
     )
 
+    // 运行时配置文件是 Hook 和 app 共用的桥，首次访问时会顺手补齐基础结构。
     fun ensureRuntimeConfig(context: Context): File {
         val deviceContext = context.createDeviceProtectedStorageContext()
         val target = File(deviceContext.filesDir, ASSET_NAME)
@@ -77,6 +80,7 @@ object FreezeListStore {
         return target
     }
 
+    // 读取单应用冻结规则时统一走同一份 JSON，避免页面和 Hook 看到不同配置。
     fun loadRule(context: Context, packageName: String): FreezeRuleConfig? {
         val apps = loadAppsObject(context) ?: return null
         val rule = apps.optJSONObject(packageName) ?: return null
@@ -87,6 +91,7 @@ object FreezeListStore {
         )
     }
 
+    // 保存规则后会立刻同步到运行时镜像，让 system_server 侧尽快读到新配置。
     fun saveRule(
         context: Context,
         packageName: String,
@@ -115,6 +120,7 @@ object FreezeListStore {
         )
     }
 
+    // 白名单开关本质上也是规则修改，所以这里同样要走镜像同步链。
     fun setWhitelist(
         context: Context,
         packageName: String,
@@ -152,6 +158,10 @@ object FreezeListStore {
 
     fun runtimeGlobalHookEnabledKey(): String = GLOBAL_HOOK_ENABLED_KEY
 
+    fun runtimeGlobalFreezeHookEnabledKey(): String = GLOBAL_FREEZE_HOOK_ENABLED_KEY
+
+    fun runtimeGlobalPerformanceHookEnabledKey(): String = GLOBAL_PERFORMANCE_HOOK_ENABLED_KEY
+
     fun runtimeGlobalProcessDebugLogEnabledKey(): String = GLOBAL_PROCESS_DEBUG_LOG_ENABLED_KEY
 
     fun runtimeGlobalForegroundPackageKey(): String = GLOBAL_FOREGROUND_PACKAGE_KEY
@@ -160,6 +170,7 @@ object FreezeListStore {
 
     fun runtimeGlobalForegroundUpdatedAtKey(): String = GLOBAL_FOREGROUND_UPDATED_AT_KEY
 
+    // 前台状态会同时写入本地偏好和时间戳，供通知、页面和日志共用。
     fun writeForegroundState(
         context: Context,
         packageName: String,
@@ -188,6 +199,7 @@ object FreezeListStore {
             .apply()
     }
 
+    // 当前前台读取会按实时来源优先级合并：activity/window -> prefs -> global -> usage。
     fun readForegroundState(context: Context): ForegroundState? {
         readForegroundStateFromActivityResume()?.let { return it }
         readForegroundStateFromWindowFocus()?.let { return it }
@@ -286,6 +298,7 @@ object FreezeListStore {
         )
     }
 
+    // window focus 是轻量兜底来源，主要处理没有前台广播但 dumpsys 还能读到焦点的场景。
     private fun readForegroundStateFromWindowFocus(): ForegroundState? {
         val now = System.currentTimeMillis()
         val cached = cachedWindowFocusState
@@ -318,6 +331,7 @@ object FreezeListStore {
         return cached
     }
 
+    // activity resume 是当前最可信的前台来源，能覆盖广播缺失和 UsageStats 滞后问题。
     private fun readForegroundStateFromActivityResume(): ForegroundState? {
         val now = System.currentTimeMillis()
         val cached = cachedActivityResumeState
@@ -363,12 +377,15 @@ object FreezeListStore {
         context.createDeviceProtectedStorageContext()
             .getSharedPreferences(RUNTIME_STATE_PREFS_NAME, Context.MODE_PRIVATE)
 
+    // 这里负责把规则和开关镜像到 Hook 可读的位置，是 app 和 system_server 的配置桥梁。
     fun syncRuntimeMirror(context: Context): Boolean {
         val runtimeFile = ensureRuntimeConfig(context)
         val runtimeJson = runCatching { runtimeFile.readText(Charsets.UTF_8) }.getOrDefault("")
         val runtimeJsonB64 = Base64.encodeToString(runtimeJson.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         val hookPollSeconds = SettingsStore.getHookPollIntervalSeconds(context)
         val hookEnabled = if (SettingsStore.isHookEnabled(context)) 1 else 0
+        val freezeHookEnabled = if (SettingsStore.isFreezeHookEnabled(context)) 1 else 0
+        val performanceHookEnabled = if (SettingsStore.isPerformanceHookEnabled(context)) 1 else 0
         val processDebugLogEnabled = if (SettingsStore.isProcessDebugLogEnabled(context)) 1 else 0
         val command = """
             mkdir -p "${runtimeMirrorDirPath()}" 2>/dev/null
@@ -379,6 +396,8 @@ object FreezeListStore {
             settings put global "${runtimeGlobalRulesKey()}" '$runtimeJsonB64'
             settings put global "${runtimeGlobalHookPollIntervalKey()}" "$hookPollSeconds"
             settings put global "${runtimeGlobalHookEnabledKey()}" "$hookEnabled"
+            settings put global "${runtimeGlobalFreezeHookEnabledKey()}" "$freezeHookEnabled"
+            settings put global "${runtimeGlobalPerformanceHookEnabledKey()}" "$performanceHookEnabled"
             settings put global "${runtimeGlobalProcessDebugLogEnabledKey()}" "$processDebugLogEnabled"
             if [ -f "${runtimeMirrorConfigPath()}" ]; then
                 echo "config_exists=1 size=$(wc -c < "${runtimeMirrorConfigPath()}") path=${runtimeMirrorConfigPath()}"
@@ -393,6 +412,8 @@ object FreezeListStore {
             echo "global_rules_len=$(settings get global "${runtimeGlobalRulesKey()}" | wc -c)"
             echo "global_poll=$(settings get global "${runtimeGlobalHookPollIntervalKey()}")"
             echo "global_hook_enabled=$(settings get global "${runtimeGlobalHookEnabledKey()}")"
+            echo "global_freeze_hook_enabled=$(settings get global "${runtimeGlobalFreezeHookEnabledKey()}")"
+            echo "global_performance_hook_enabled=$(settings get global "${runtimeGlobalPerformanceHookEnabledKey()}")"
             echo "global_process_debug_log_enabled=$(settings get global "${runtimeGlobalProcessDebugLogEnabledKey()}")"
         """.trimIndent()
         return runCatching {

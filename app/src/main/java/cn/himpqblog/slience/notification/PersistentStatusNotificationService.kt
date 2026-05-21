@@ -18,11 +18,15 @@ import android.os.Looper
 import android.content.pm.ServiceInfo
 import android.content.pm.PackageManager
 import android.util.Log
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import cn.himpqblog.slience.R
 import cn.himpqblog.slience.config.FreezeListStore
 import cn.himpqblog.slience.ipc.FreezeCommandReceiver
+import cn.himpqblog.slience.perf.PerformanceConfigStore
+import cn.himpqblog.slience.perf.PerformanceExternalModeWriter
 import cn.himpqblog.slience.settings.SettingsStore
 import java.util.Locale
 
@@ -36,6 +40,7 @@ class PersistentStatusNotificationService : Service() {
         private const val ACTION_REFRESH_NOTIFICATION = "cn.himpqblog.slience.action.REFRESH_NOTIFICATION"
 
         fun syncState(context: Context) {
+            // 这是通知服务的总入口：根据开关状态决定启动、停止或仅刷新。
             val appContext = context.applicationContext
             if (SettingsStore.isPersistentNotificationEnabled(appContext) && hasNotificationPermission(appContext)) {
                 start(appContext)
@@ -55,6 +60,7 @@ class PersistentStatusNotificationService : Service() {
         }
 
         fun requestImmediateRefresh(context: Context) {
+            // 前台应用或挡位变化时走这条快速刷新，不等下一轮定时器。
             val appContext = context.applicationContext
             val intent = Intent(appContext, PersistentStatusNotificationService::class.java).apply {
                 action = ACTION_REFRESH_NOTIFICATION
@@ -133,11 +139,13 @@ class PersistentStatusNotificationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    // 定时刷新只负责兜底，真正的前台切换刷新会由广播单独触发。
     private fun schedulePeriodicRefresh() {
         mainHandler.removeCallbacks(updateRunnable)
         mainHandler.postDelayed(updateRunnable, UPDATE_INTERVAL_MS)
     }
 
+    // 每次刷新都会重新读取前台应用、电池信息和当前挡位，保证显示链路一致。
     private fun refreshNotification() {
         if (!SettingsStore.isPersistentNotificationEnabled(applicationContext) ||
             !hasNotificationPermission(applicationContext)
@@ -153,18 +161,30 @@ class PersistentStatusNotificationService : Service() {
                 "Silence|notification|refresh foreground=${foreground?.packageName ?: "unknown"} source=${foreground?.source ?: "none"} updatedAt=${foreground?.updatedAt ?: 0L}"
             )
         }
+        PerformanceExternalModeWriter.syncCurrentMode(
+            applicationContext,
+            PerformanceConfigStore.resolveModeForPackage(applicationContext, foreground?.packageName)
+        )
         manager.notify(NOTIFICATION_ID, buildNotification(foreground))
     }
 
+    // 通知内容统一从这里组装，避免普通内容和自定义布局各算各的状态。
     private fun buildNotification(foreground: FreezeListStore.ForegroundState? = FreezeListStore.readForegroundState(applicationContext)): Notification {
         val battery = readBatterySnapshot()
         val foregroundText = foreground?.packageName?.takeIf { it.isNotBlank() }
             ?: getString(R.string.home_foreground_unknown)
+        val modeText = getString(
+            PerformanceConfigStore.resolveModeForPackage(this, foreground?.packageName).labelRes
+        )
         val powerSummary = battery?.powerSummaryText(this) ?: getString(R.string.notification_power_unknown)
         val detailText = buildString {
             append(getString(R.string.notification_foreground_label))
             append(": ")
             append(foregroundText)
+            append('\n')
+            append(getString(R.string.notification_performance_label))
+            append(": ")
+            append(modeText)
             append('\n')
             append(getString(R.string.notification_power_label))
             append(": ")
@@ -174,19 +194,21 @@ class PersistentStatusNotificationService : Service() {
                 append(line)
             }
         }
-        val contentText = getString(R.string.notification_content_format, foregroundText, powerSummary)
+        val contentText = getString(R.string.notification_content_format, foregroundText, modeText)
         val pendingIntent = PendingIntent.getBroadcast(
             this,
             0,
             Intent(this, PerformanceFloatingWindowReceiver::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val contentView = createNotificationContentView(foregroundText, powerSummary, modeText)
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_status_monitor)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(contentText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(detailText))
+            .setCustomContentView(contentView)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -197,6 +219,30 @@ class PersistentStatusNotificationService : Service() {
             .build()
     }
 
+    // 自定义通知面板只展示核心信息，减少系统折叠后信息丢失。
+    private fun createNotificationContentView(
+        foregroundText: String,
+        powerSummary: String,
+        modeText: String
+    ): RemoteViews {
+        return RemoteViews(packageName, R.layout.notification_status_panel).apply {
+            resolveSilenceIconBitmap()?.let {
+                setImageViewBitmap(R.id.notificationAppIcon, it)
+            } ?: setImageViewResource(R.id.notificationAppIcon, R.drawable.ic_nav_home)
+            setTextViewText(R.id.notificationForegroundPackage, foregroundText)
+            setTextViewText(R.id.notificationPowerSummary, powerSummary)
+            setTextViewText(R.id.notificationModeLabel, modeText)
+        }
+    }
+
+    private fun resolveSilenceIconBitmap() = runCatching {
+        val iconSize = (28f * resources.displayMetrics.density).toInt().coerceAtLeast(24)
+        packageManager
+            .getApplicationIcon(applicationInfo)
+            .toBitmap(width = iconSize, height = iconSize)
+    }.getOrNull()
+
+    // 通知只需要轻量电池快照，不复用性能日志那套完整结构，避免额外开销。
     private fun readBatterySnapshot(): BatterySnapshot? {
         val batteryManager = getSystemService(BATTERY_SERVICE) as? BatteryManager ?: return null
         val currentNow = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
@@ -213,6 +259,7 @@ class PersistentStatusNotificationService : Service() {
         )
     }
 
+    // 通知服务单独监听前台变化广播，用来在用户切应用时立刻刷新文案。
     private fun registerForegroundReceiver() {
         if (receiverRegistered) {
             return

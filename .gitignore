@@ -10,3 +10,4 @@ app/build/
 .gradle-user
 gradle
 LSPOSED_MODERN_API.md
+.codex_tmp

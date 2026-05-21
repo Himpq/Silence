@@ -23,6 +23,7 @@ import cn.himpqblog.slience.hook.RuntimeLogStore
 import cn.himpqblog.slience.process.AppRuntimeState
 import cn.himpqblog.slience.process.CpuSnapshot
 import cn.himpqblog.slience.process.ProcessAppItem
+import cn.himpqblog.slience.process.ProcessListCacheStore
 import cn.himpqblog.slience.process.ProcessInspector
 import cn.himpqblog.slience.process.ProcessListAdapter
 import cn.himpqblog.slience.root.Permission
@@ -129,6 +130,7 @@ class ProcessFragment : Fragment() {
                 Toast.makeText(ctx, "触发失败", Toast.LENGTH_SHORT).show()
             }
         }
+        showCachedProcessList()
     }
 
     override fun onResume() {
@@ -168,6 +170,7 @@ class ProcessFragment : Fragment() {
                     val uiStart = SystemClock.elapsedRealtime()
                     val sortedItems = sortItems(result.items)
                     adapter.submitList(sortedItems)
+                    ProcessListCacheStore.write(ctx, sortedItems)
                     RuntimeLogStore.appendDiagnostic(
                         "process-ui",
                         "items=${result.items.size} processes=${result.items.sumOf { it.processCount }} error=${result.errorMessage ?: "none"} uiSubmit=${SystemClock.elapsedRealtime() - uiStart}ms",
@@ -201,6 +204,20 @@ class ProcessFragment : Fragment() {
                 refreshing.set(false)
             }
         }.start()
+    }
+
+    private fun showCachedProcessList() {
+        val ctx = context?.applicationContext ?: return
+        val cachedItems = sortItems(ProcessListCacheStore.read(ctx))
+        if (cachedItems.isEmpty()) {
+            return
+        }
+        adapter.submitList(cachedItems)
+        binding.processStatusValue.text = getString(
+            R.string.process_status_summary,
+            cachedItems.size,
+            cachedItems.sumOf { it.processCount }
+        )
     }
 
     private fun showProcessSettingsDialog(item: ProcessAppItem) {

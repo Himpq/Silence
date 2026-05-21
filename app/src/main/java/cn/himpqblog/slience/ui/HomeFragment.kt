@@ -100,4 +100,5 @@ class HomeFragment : Fragment() {
             }
         }.start()
     }
+
 }

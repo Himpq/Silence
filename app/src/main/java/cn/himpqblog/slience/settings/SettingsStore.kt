@@ -11,9 +11,16 @@ object SettingsStore {
     private const val KEY_PROCESS_REFRESH_INTERVAL_SECONDS = "process_refresh_interval_seconds"
     private const val KEY_HOOK_POLL_INTERVAL_SECONDS = "hook_poll_interval_seconds"
     private const val KEY_HOOK_ENABLED = "hook_enabled"
+    private const val KEY_FREEZE_HOOK_ENABLED = "freeze_hook_enabled"
+    private const val KEY_PERFORMANCE_HOOK_ENABLED = "performance_hook_enabled"
     private const val KEY_PROCESS_DEBUG_LOG_ENABLED = "process_debug_log_enabled"
     private const val KEY_FOREGROUND_DEBUG_LOG_ENABLED = "foreground_debug_log_enabled"
     private const val KEY_PERSISTENT_NOTIFICATION_ENABLED = "persistent_notification_enabled"
+    private const val KEY_POWER_RECORD_ENABLED = "power_record_enabled"
+    private const val KEY_PERFORMANCE_SCHEDULE_ENABLED = "performance_schedule_enabled"
+    private const val KEY_POWER_RECORD_POLL_INTERVAL_SECONDS = "power_record_poll_interval_seconds"
+    private const val KEY_EXTERNAL_PERFORMANCE_MODE_ENABLED = "external_performance_mode_enabled"
+    private const val KEY_EXTERNAL_PERFORMANCE_MODE_PATH = "external_performance_mode_path"
 
     enum class ProcessSortMode {
         CPU,
@@ -106,6 +113,28 @@ object SettingsStore {
             .apply()
     }
 
+    fun isFreezeHookEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_FREEZE_HOOK_ENABLED, true)
+    }
+
+    fun setFreezeHookEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_FREEZE_HOOK_ENABLED, enabled)
+            .apply()
+    }
+
+    fun isPerformanceHookEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_PERFORMANCE_HOOK_ENABLED, true)
+    }
+
+    fun setPerformanceHookEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_PERFORMANCE_HOOK_ENABLED, enabled)
+            .apply()
+    }
+
     fun isProcessDebugLogEnabled(context: Context): Boolean {
         return prefs(context).getBoolean(KEY_PROCESS_DEBUG_LOG_ENABLED, false)
     }
@@ -136,6 +165,66 @@ object SettingsStore {
         prefs(context)
             .edit()
             .putBoolean(KEY_PERSISTENT_NOTIFICATION_ENABLED, enabled)
+            .apply()
+    }
+
+    fun isPowerRecordEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_POWER_RECORD_ENABLED, false)
+    }
+
+    fun setPowerRecordEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_POWER_RECORD_ENABLED, enabled)
+            .apply()
+    }
+
+    fun isPerformanceScheduleEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_PERFORMANCE_SCHEDULE_ENABLED, false)
+    }
+
+    fun setPerformanceScheduleEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_PERFORMANCE_SCHEDULE_ENABLED, enabled)
+            .apply()
+    }
+
+    fun getPowerRecordPollIntervalSeconds(context: Context): Int {
+        return prefs(context)
+            .getInt(KEY_POWER_RECORD_POLL_INTERVAL_SECONDS, 15)
+            .coerceIn(5, 300)
+    }
+
+    fun setPowerRecordPollIntervalSeconds(context: Context, seconds: Int) {
+        prefs(context)
+            .edit()
+            .putInt(KEY_POWER_RECORD_POLL_INTERVAL_SECONDS, seconds.coerceIn(5, 300))
+            .apply()
+    }
+
+    fun isExternalPerformanceModeEnabled(context: Context): Boolean {
+        return prefs(context).getBoolean(KEY_EXTERNAL_PERFORMANCE_MODE_ENABLED, false)
+    }
+
+    fun setExternalPerformanceModeEnabled(context: Context, enabled: Boolean) {
+        prefs(context)
+            .edit()
+            .putBoolean(KEY_EXTERNAL_PERFORMANCE_MODE_ENABLED, enabled)
+            .apply()
+    }
+
+    fun getExternalPerformanceModePath(context: Context): String {
+        return prefs(context)
+            .getString(KEY_EXTERNAL_PERFORMANCE_MODE_PATH, "")
+            .orEmpty()
+            .trim()
+    }
+
+    fun setExternalPerformanceModePath(context: Context, path: String) {
+        prefs(context)
+            .edit()
+            .putString(KEY_EXTERNAL_PERFORMANCE_MODE_PATH, path.trim())
             .apply()
     }
 }

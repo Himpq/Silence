@@ -19,4 +19,11 @@
     <color name="nav_item_unchecked">#8293AA</color>
     <color name="soft_green">#243542</color>
     <color name="soft_green_on_brand">#2A4A62</color>
+    <color name="notification_text_primary">#1E2733</color>
+    <color name="notification_text_secondary">#5A6878</color>
+    <color name="notification_mode_bg">#E6EDF5</color>
+    <color name="perf_bar_hot">#FF8F77</color>
+    <color name="perf_bar_warm">#FFBF74</color>
+    <color name="perf_bar_cool">#8BBEFF</color>
+    <color name="perf_bar_cold">#D8E8FF</color>
 </resources>

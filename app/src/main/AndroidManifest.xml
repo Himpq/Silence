@@ -40,6 +40,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ui.PerformanceRecordsActivity"
+            android:exported="false" />
+
         <receiver
             android:name=".ipc.FreezeCommandReceiver"
             android:enabled="true"

@@ -7,6 +7,7 @@ import android.util.Log
 import cn.himpqblog.slience.config.FreezeListStore
 import cn.himpqblog.slience.hook.RuntimeLogStore
 import cn.himpqblog.slience.notification.PersistentStatusNotificationService
+import cn.himpqblog.slience.perf.PerformanceExternalModeWriter
 import cn.himpqblog.slience.process.ProcessInspector
 import cn.himpqblog.slience.settings.SettingsStore
 
@@ -22,6 +23,7 @@ class FreezeCommandReceiver : BroadcastReceiver() {
         const val ENABLE_IPC_LOG = false
     }
 
+    // app 侧 IPC 总入口：来自 Hook 的冻结命令和前台状态广播都从这里分流。
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             ACTION_FREEZE_COMMAND -> handleFreezeCommand(context, intent)
@@ -29,6 +31,7 @@ class FreezeCommandReceiver : BroadcastReceiver() {
         }
     }
 
+    // 冻结/解冻广播在这里落到真正的进程执行层，并回写本地运行态。
     private fun handleFreezeCommand(context: Context, intent: Intent) {
         val packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME).orEmpty().trim()
         if (packageName.isEmpty()) {
@@ -67,6 +70,7 @@ class FreezeCommandReceiver : BroadcastReceiver() {
         }.start()
     }
 
+    // 前台状态广播会立刻刷新本地缓存，并触发通知同步，避免前台显示滞后。
     private fun handleForegroundState(context: Context, intent: Intent) {
         val packageName = intent.getStringExtra(EXTRA_PACKAGE_NAME).orEmpty().trim()
         val source = intent.getStringExtra(EXTRA_SOURCE).orEmpty().trim()
@@ -87,6 +91,7 @@ class FreezeCommandReceiver : BroadcastReceiver() {
                 updatedAt = System.currentTimeMillis()
             )
         }
+        PerformanceExternalModeWriter.syncCurrentMode(appContext)
         PersistentStatusNotificationService.requestImmediateRefresh(appContext)
     }
 }
