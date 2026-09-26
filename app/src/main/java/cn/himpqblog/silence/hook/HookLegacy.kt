@@ -2167,7 +2167,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         val context = appContext ?: return FreezeWriteResult(0, emptyList(), "system_context_unavailable")
         val uid = resolvePackageUid(packageName) ?: return FreezeWriteResult(0, emptyList(), "package_uid_unavailable")
         val version = DaemonControlClient.nextVersion()
-        val response = HookDaemonBridge.freeze(context, packageName, uid, targetFrozen, rule?.freezeProcesses.orEmpty(), version, prelaunch = true)
+        val response = HookDaemonBridge.freeze(context, packageName, uid, targetFrozen, rule?.freezeProcesses.orEmpty(), version, prelaunch = !targetFrozen)
         val verified = response?.optBoolean("success") == true
         return FreezeWriteResult(if (verified) maxOf(1, response!!.optInt("writes")) else 0,
             rule?.freezeProcesses.orEmpty(), response?.optString("detail") ?: "daemon_unavailable")

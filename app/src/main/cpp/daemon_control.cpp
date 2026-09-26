@@ -170,8 +170,14 @@ Json freeze(const Json& r, int caller) {
     if (steady_ms() > deadline) return failure("request_expired");
     if (version <= state->last_version) return failure("stale_request");
     state->last_version = version;
-    if (!frozen && (caller == 1000 || (r.has("prelaunch") && r.at("prelaunch").flag()))) state->protect_until = steady_ms() + 15000;
-    if (frozen && steady_ms() < state->protect_until) return failure("launch_protected");
+    // Only a genuine pre-launch thaw re-arms the launch guard, and it never extends a
+    // window that is already open. A normal thaw must stay side-effect free: the hook
+    // reconciles thaws on every foreground transition, and re-arming here kept every
+    // later freeze blocked as launch_protected. The app path is never launch guarded.
+    const bool hook = caller == 1000 || caller == 0;
+    if (!frozen && hook && r.has("prelaunch") && r.at("prelaunch").flag())
+        state->protect_until = std::max(state->protect_until, steady_ms() + 15000);
+    if (frozen && hook && steady_ms() < state->protect_until) return failure("launch_protected");
     {
         std::lock_guard<std::mutex> lock(state_mutex);
         if (frozen && foreground == package) return failure("foreground_protected");
