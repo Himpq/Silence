@@ -92,6 +92,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         private var pollFuture: ScheduledFuture<*>? = null
         private val pollTimeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         private val uidTrafficCache = ConcurrentHashMap<Int, TrafficBytes>()
+        private val uidTrafficActiveUntil = ConcurrentHashMap<Int, Long>()
         private const val STABLE_STATE_WINDOW_MS = 1200L
         private const val PACKAGE_SIGNAL_DEBOUNCE_MS = 1500L
         private const val MIN_COMMIT_SWITCH_INTERVAL_MS = 2500L
@@ -99,6 +100,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         private const val FAILURE_LOG_THROTTLE_MS = 60_000L
         private const val SKIP_LOG_THROTTLE_MS = 30_000L
         private const val FREEZE_REASSERT_INTERVAL_MS = 15_000L
+        private const val NETWORK_ACTIVE_WINDOW_MS = 35_000L
         private const val LAUNCH_PROTECT_MS = 15_000L
         private const val FOREGROUND_RETURN_PROTECT_MS = 10_000L
         private const val ENABLE_BRIDGE_HOT_LOGS = false
@@ -2091,7 +2093,18 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun isPackageNetworkActive(packageName: String): Boolean {
         val uid = resolvePackageUid(packageName) ?: return false
-        return hasUidTrafficDelta(uid)
+        sampleUidTraffic(uid)
+        return (uidTrafficActiveUntil[uid] ?: 0L) >= System.currentTimeMillis()
+    }
+
+    // 轮询不只由定时器触发，亮屏/唤醒也会插一次全量扫描。这里必须按时间窗记录“有流量”，
+    // 不能用一次性的差值样本，否则先跑的那次会把差值吃掉，后面的判据全变成“没流量”。
+    private fun sampleUidTraffic(uid: Int) {
+        val current = readUidTrafficBytes(uid) ?: return
+        val previous = uidTrafficCache.put(uid, current) ?: return
+        if (current.rxBytes != previous.rxBytes || current.txBytes != previous.txBytes) {
+            uidTrafficActiveUntil[uid] = System.currentTimeMillis() + NETWORK_ACTIVE_WINDOW_MS
+        }
     }
 
     private fun readUidProcState(packageName: String): Int? {
@@ -2147,12 +2160,8 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     private fun hasUidTrafficDelta(uid: Int): Boolean {
-        val current = readUidTrafficBytes(uid) ?: return false
-        val previous = uidTrafficCache.put(uid, current)
-        if (previous == null) {
-            return false
-        }
-        return current.rxBytes > previous.rxBytes || current.txBytes > previous.txBytes
+        sampleUidTraffic(uid)
+        return (uidTrafficActiveUntil[uid] ?: 0L) >= System.currentTimeMillis()
     }
 
     private fun readUidTrafficBytes(uid: Int): TrafficBytes? {
