@@ -206,6 +206,23 @@
                 android:text="@string/process_action_whitelist" />
         </LinearLayout>
 
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/processKeepAliveButton"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:minWidth="0dp"
+            android:text="@string/process_action_keep_alive" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/process_keep_alive_hint"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+
         <TextView
             android:id="@+id/freezeTargetsLabel"
             android:layout_width="match_parent"

@@ -1,6 +1,6 @@
 {
   "apps": {
-    "cn.himpqblog.slience": {
+    "cn.himpqblog.silence": {
       "freeze_processes": [
         "ALL"
       ],

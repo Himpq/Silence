@@ -18,5 +18,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Slience"
+rootProject.name = "Silence"
 include(":app")

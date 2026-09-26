@@ -9,16 +9,26 @@ plugins {
 }
 
 android {
-    namespace = "cn.himpqblog.slience"
+    namespace = "cn.himpqblog.silence"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "cn.himpqblog.slience"
+        applicationId = "cn.himpqblog.silence"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
         versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags += "-std=c++17"
+            }
+        }
     }
 
     buildTypes {
@@ -45,12 +55,35 @@ android {
         buildConfig = true
     }
 
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
     sourceSets {
         getByName("main") {
+            assets.srcDir(layout.buildDirectory.dir("generated/daemon-assets"))
             if (enableModernLsposed.get()) {
                 java.srcDir("src/modern/java")
             }
         }
+    }
+}
+
+// CMake builds the native executable and copies it into the generated asset tree.
+// The asset merge must wait for the matching native variant, otherwise a clean build
+// can package an empty daemon directory.
+afterEvaluate {
+    tasks.matching { task ->
+        task.name.startsWith("merge") && task.name.endsWith("Assets")
+    }.configureEach {
+        val variantName = name.removePrefix("merge").removeSuffix("Assets")
+        dependsOn(tasks.matching { task ->
+            task.name == "externalNativeBuild$variantName" ||
+                task.name.startsWith("buildCMake$variantName")
+        })
     }
 }
 

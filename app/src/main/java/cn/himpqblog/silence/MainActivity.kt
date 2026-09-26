@@ -1,0 +1,267 @@
+package cn.himpqblog.silence
+
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.util.Log
+import androidx.appcompat.widget.ActionMenuView
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
+import androidx.fragment.app.Fragment
+import cn.himpqblog.silence.daemon.DaemonStartResult
+import cn.himpqblog.silence.daemon.SilenceDaemonManager
+import cn.himpqblog.silence.hook.RuntimeLogStore
+import cn.himpqblog.silence.notification.PerformanceFloatingWindowController
+import cn.himpqblog.silence.perf.PerformanceRecordingScheduler
+import cn.himpqblog.silence.databinding.ActivityMainBinding
+import cn.himpqblog.silence.ui.FeaturesFragment
+import cn.himpqblog.silence.ui.HomeFragment
+import cn.himpqblog.silence.ui.LogsFragment
+import cn.himpqblog.silence.ui.PerformanceFragment
+import cn.himpqblog.silence.ui.ProcessFragment
+
+class MainActivity : AppCompatActivity() {
+
+    companion object {
+        private const val TAG = "Silence_Perf_Log"
+        const val ACTION_SHOW_PERFORMANCE_OVERLAY =
+            "cn.himpqblog.silence.action.SHOW_PERFORMANCE_OVERLAY"
+    }
+
+    private lateinit var binding: ActivityMainBinding
+    private var currentTab: Int = 0
+    private var overlayPendingAfterPermission = false
+
+    private val pageTitles by lazy {
+        listOf(
+            getString(R.string.page_home),
+            getString(R.string.page_performance),
+            getString(R.string.page_process),
+            getString(R.string.page_logs),
+            getString(R.string.page_features)
+        )
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        // App 显式启动时先申请 root，再启动 daemon；第一版不接开机自启和无障碍入口。
+        startDaemonAfterRootGrant()
+
+        if (binding.topToolbar.menu.size() == 0) {
+            binding.topToolbar.inflateMenu(R.menu.menu_top_actions)
+        }
+        window.statusBarColor = ContextCompat.getColor(this, R.color.surface_panel)
+        window.navigationBarColor = ContextCompat.getColor(this, R.color.surface_panel)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+
+        applyWindowInsets()
+        setupToolbarActions()
+        setupBottomNavigation()
+
+        if (savedInstanceState == null) {
+            switchToTab(0)
+            binding.bottomNav.selectedItemId = R.id.nav_home
+        } else {
+            currentTab = tabFromMenuId(binding.bottomNav.selectedItemId)
+            applyTopBarState(currentTab)
+        }
+        handleNotificationIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent?) {
+        super.onNewIntent(intent)
+        if (intent == null) return
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!overlayPendingAfterPermission) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)) {
+            overlayPendingAfterPermission = false
+            Log.i(TAG, "overlay permission returned, showing pending overlay")
+            PerformanceFloatingWindowController.show(this)
+        }
+    }
+
+    private fun handleNotificationIntent(intent: android.content.Intent?) {
+        Log.i(TAG, "notification intent action=${intent?.action ?: "none"}")
+        if (intent?.action != ACTION_SHOW_PERFORMANCE_OVERLAY) return
+        Log.i(TAG, "notification overlay action accepted")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            overlayPendingAfterPermission = true
+            Log.i(TAG, "overlay permission missing, opening system settings")
+            runCatching {
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                )
+            }.onFailure { error ->
+                overlayPendingAfterPermission = false
+                Log.i(TAG, "overlay permission settings failed: ${error.message ?: error.javaClass.simpleName}")
+            }
+            intent.action = null
+            return
+        }
+        PerformanceFloatingWindowController.show(this)
+        intent.action = null
+    }
+
+    private fun startDaemonAfterRootGrant() {
+        SilenceDaemonManager.requestStart(this) { result ->
+            recordDaemonStartupResult(result)
+            if (result.ready) {
+                PerformanceRecordingScheduler.start(this)
+            }
+        }
+    }
+
+    private fun recordDaemonStartupResult(result: DaemonStartResult) {
+        RuntimeLogStore.appendDiagnostic(
+            source = "daemon",
+            message = "startup ready=${result.ready} summary=${result.summary} details=${result.details.joinToString(" | ")}",
+            throttleKey = "daemon_startup_result",
+            throttleMs = 0L,
+            category = if (result.ready) {
+                RuntimeLogStore.LogCategory.LOG
+            } else {
+                RuntimeLogStore.LogCategory.ERROR
+            }
+        )
+    }
+
+    private fun applyWindowInsets() {
+        val toolbarBaseHeight = resources.getDimensionPixelSize(R.dimen.top_bar_height)
+        val bottomNavBaseHeight = resources.getDimensionPixelSize(R.dimen.bottom_nav_height)
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+
+            binding.topToolbar.updatePadding(top = systemBars.top)
+            binding.topToolbar.updateLayoutParams {
+                height = toolbarBaseHeight + systemBars.top
+            }
+
+            binding.bottomNav.updatePadding(bottom = systemBars.bottom)
+            binding.bottomNav.updateLayoutParams {
+                height = bottomNavBaseHeight + systemBars.bottom
+            }
+
+            insets
+        }
+        ViewCompat.requestApplyInsets(binding.root)
+    }
+
+    private fun setupBottomNavigation() {
+        binding.bottomNav.setOnItemSelectedListener { item ->
+            val target = tabFromMenuId(item.itemId)
+            if (target != currentTab) {
+                switchToTab(target)
+            }
+            true
+        }
+    }
+
+    private fun setupToolbarActions() {
+        val tint = ContextCompat.getColor(this, R.color.text_primary)
+        for (i in 0 until binding.topToolbar.menu.size()) {
+            binding.topToolbar.menu.getItem(i).icon?.setTint(tint)
+        }
+
+        binding.topToolbar.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.action_clear_logs -> {
+                    currentLogsFragment()?.clearLogs()
+                    true
+                }
+
+                R.id.action_copy_logs -> {
+                    currentLogsFragment()?.copyAllLogs()
+                    true
+                }
+
+                else -> false
+            }
+        }
+    }
+
+    private fun switchToTab(index: Int) {
+        currentTab = index
+        supportFragmentManager
+            .beginTransaction()
+            .replace(R.id.contentContainer, createTabFragment(index), tagFor(index))
+            .commit()
+
+        applyTopBarState(index)
+    }
+
+    private fun applyTopBarState(index: Int) {
+        binding.pageTitle.text = pageTitles.getOrElse(index) { getString(R.string.page_home) }
+        binding.topToolbar.menu.findItem(R.id.action_clear_logs)?.isVisible = index == 3
+        binding.topToolbar.menu.findItem(R.id.action_copy_logs)?.isVisible = index == 3
+        binding.topToolbar.post {
+            val menuView = (0 until binding.topToolbar.childCount)
+                .map { binding.topToolbar.getChildAt(it) }
+                .filterIsInstance<ActionMenuView>()
+                .firstOrNull()
+            menuView?.translationY = if (index == 3) {
+                -resources.displayMetrics.density * 2f
+            } else {
+                0f
+            }
+        }
+    }
+
+    private fun currentLogsFragment(): LogsFragment? {
+        return supportFragmentManager.findFragmentById(R.id.contentContainer) as? LogsFragment
+    }
+
+    private fun createTabFragment(index: Int): Fragment {
+        return when (index) {
+            0 -> HomeFragment()
+            1 -> PerformanceFragment()
+            2 -> ProcessFragment()
+            3 -> LogsFragment()
+            4 -> FeaturesFragment()
+            else -> HomeFragment()
+        }
+    }
+
+    private fun tabFromMenuId(menuId: Int): Int {
+        return when (menuId) {
+            R.id.nav_home -> 0
+            R.id.nav_performance -> 1
+            R.id.nav_process -> 2
+            R.id.nav_logs -> 3
+            R.id.nav_features -> 4
+            else -> 0
+        }
+    }
+
+    private fun tagFor(index: Int): String {
+        return when (index) {
+            0 -> "tab_home"
+            1 -> "tab_performance"
+            2 -> "tab_process"
+            3 -> "tab_logs"
+            4 -> "tab_features"
+            else -> "tab_home"
+        }
+    }
+}

@@ -82,7 +82,7 @@ Core issue: two independent loops are hard to compare.
 Use file-based debug artifacts (not IPC):
 
 - Hook writes compact JSON trace to app-readable file:
-  - `/data/user_de/0/cn.himpqblog.slience/files/hook_trace.jsonl`
+  - `/data/user_de/0/cn.himpqblog.silence/files/hook_trace.jsonl`
 - One line per decision/event:
   - timestamp
   - source (`event` / `poll`)
@@ -104,7 +104,7 @@ This avoids binder/IPC but still gives deterministic postmortem visibility.
 ### 6.1 FreezeList runtime file
 
 - Continue using runtime writable file:
-  - `/data/user_de/0/cn.himpqblog.slience/files/FreezeList.json`
+  - `/data/user_de/0/cn.himpqblog.silence/files/FreezeList.json`
 - Hook and app both read same file.
 - App writes updates atomically (write temp + rename).
 

@@ -32,7 +32,7 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <cn.himpqblog.slience.ui.widgets.PerformanceTrendPlaceholderView
+            <cn.himpqblog.silence.ui.widgets.PerformanceTrendPlaceholderView
                 android:id="@+id/performanceTrendPlaceholder"
                 android:layout_width="match_parent"
                 android:layout_height="360dp" />
