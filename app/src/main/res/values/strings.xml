@@ -178,9 +178,9 @@ CPU: %5$s
     <string name="settings_notification_summary">在通知栏持续显示当前前台应用和估算功耗，便于后续关注。</string>
     <string name="settings_notification_toggle_title">启用常驻通知</string>
     <string name="settings_startup_title">自启动与守护</string>
-    <string name="settings_startup_summary">控制 Silence 是否在开机、解锁和应用更新后自动恢复，以及是否启用独立守护 Daemon 保持常驻。</string>
+    <string name="settings_startup_summary">daemon 始终会在开机和应用更新后自动恢复；这里只控制常驻通知和耗电记录是否也跟着恢复。</string>
     <string name="settings_auto_start_enabled_title">开机自启动</string>
-    <string name="settings_auto_start_enabled_summary">启用后在开机、用户解锁和应用更新后自动恢复 Silence 的通知、记录和守护链。</string>
+    <string name="settings_auto_start_enabled_summary">启用后在开机、用户解锁和应用更新后自动恢复 Silence 的常驻通知和耗电记录。</string>
     <string name="settings_daemon_protection_enabled_title">守护 Daemon</string>
     <string name="settings_daemon_protection_enabled_summary">启用后使用独立前台守护服务维持 Silence 常驻，并在异常退出后尝试自动拉起。</string>
     <string name="settings_power_record_enabled_title">启用耗电记录</string>
