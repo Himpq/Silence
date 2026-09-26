@@ -124,6 +124,10 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         private val processPriorityContentServiceReady = AtomicBoolean(false)
         private val processPrioritySettingsProviderHookInstalled = AtomicBoolean(false)
         private val lastOomClampLogByPid = ConcurrentHashMap<Int, String>()
+        private const val DIRECT_FREEZE_UNKNOWN = 0
+        private const val DIRECT_FREEZE_OK = 1
+        private const val DIRECT_FREEZE_DENIED = -1
+        private val directFreezeMode = AtomicInteger(DIRECT_FREEZE_UNKNOWN)
         @Volatile
         private var processPriorityObserver: ContentObserver? = null
     }
@@ -2177,16 +2181,116 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         return TrafficBytes(rx, tx)
     }
 
+    // system_server 天然具备直写条件：它在 readproc 组里（/proc 挂载带 hidepid=invisible，只有该组能看
+    // 到别人的进程），而 cgroup freezer 目录的 owner 就是 system:system 0775 —— 平台自己的
+    // CachedProcessState 冻后台应用走的是同一条路。所以这里不需要 root，也不需要 daemon 参与；
+    // 写不了才把活退回给 daemon。
+    private fun writeFreezeDirect(
+        uid: Int,
+        packageName: String,
+        targets: List<String>,
+        frozen: Boolean
+    ): FreezeWriteResult? {
+        if (uid < 10000 || directFreezeMode.get() == DIRECT_FREEZE_DENIED) return null
+        val uidDir = File("$CGROUP_FREEZE_BASE/uid_$uid")
+        val children = uidDir.listFiles()
+        if (children == null) {
+            // 目录都读不到就说明这条路整体不可用，不必每次都重试。
+            directFreezeMode.set(DIRECT_FREEZE_DENIED)
+            logHookDebug("direct freeze unavailable uid=$uid reason=cgroup_dir_unreadable")
+            return null
+        }
+        val names = targets.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        val all = names.isEmpty() || names.any { it.equals("ALL", ignoreCase = true) }
+        val selected = ArrayList<DirectTarget>()
+        for (child in children) {
+            if (!child.name.startsWith("pid_")) continue
+            val pid = child.name.removePrefix("pid_").toIntOrNull() ?: continue
+            val identity = readProcessIdentity(pid) ?: continue
+            if (identity.processName != packageName && !identity.processName.startsWith("$packageName:")) continue
+            val display = identity.processName.substringAfter(':', "main")
+            if (!all && !names.contains(identity.processName) && !names.contains(display)) continue
+            selected.add(DirectTarget(pid, identity.startTime))
+        }
+        if (frozen && selected.isEmpty()) {
+            return FreezeWriteResult(0, emptyList(), "no_target_processes")
+        }
+        var writes = 0
+        val failures = ArrayList<String>()
+        // 只冻子进程时父级可能还冻着，子进程即使解冻也跑不起来，所以解冻先写父级。
+        if (!frozen) {
+            if (writeFreezeFlag(File(uidDir, "cgroup.freeze"), 0)) writes++ else failures += "uid_parent"
+        }
+        for (target in selected) {
+            // 写之前复核一次 pid 身份，避免写到已回收复用的同名进程上。
+            if (readProcessStartTime(target.pid) != target.startTime) {
+                failures += "pid_${target.pid}_identity_changed"
+                continue
+            }
+            if (writeFreezeFlag(File(File(uidDir, "pid_${target.pid}"), "cgroup.freeze"), if (frozen) 1 else 0)) {
+                writes++
+            } else {
+                failures += "pid_${target.pid}_write_failed"
+            }
+        }
+        directFreezeMode.set(DIRECT_FREEZE_OK)
+        val detail = "direct uid=$uid selected=${selected.size} writes=$writes failures=${failures.joinToString(",")}"
+        if (failures.isNotEmpty()) {
+            logHookDebug("direct freeze incomplete $detail")
+        }
+        return FreezeWriteResult(if (failures.isEmpty()) maxOf(1, writes) else 0, selected.map { it.pid.toString() }, detail)
+    }
+
+    private fun writeFreezeFlag(file: File, value: Int): Boolean = runCatching {
+        val payload = (if (value == 1) "1" else "0").toByteArray()
+        val fd = android.system.Os.open(file.absolutePath, android.system.OsConstants.O_WRONLY, 0)
+        val written = try {
+            android.system.Os.write(fd, payload, 0, payload.size)
+        } finally {
+            android.system.Os.close(fd)
+        }
+        written == payload.size && runCatching { file.readText().trim() }.getOrNull() == value.toString()
+    }.getOrElse { error ->
+        if (error is android.system.ErrnoException &&
+            (error.errno == android.system.OsConstants.EACCES || error.errno == android.system.OsConstants.EPERM)
+        ) {
+            // 被 SELinux 或 DAC 拒绝就记住结果，避免每条命令都白试一次。
+            directFreezeMode.set(DIRECT_FREEZE_DENIED)
+            logHookDebug("direct freeze denied path=${file.absolutePath} errno=${error.errno}")
+        }
+        false
+    }
+
+    private fun readProcessIdentity(pid: Int): DirectProcessIdentity? {
+        val cmdline = runCatching { File("/proc/$pid/cmdline").readBytes() }.getOrNull() ?: return null
+        val name = cmdline.toString(Charsets.UTF_8).substringBefore('\u0000').trim()
+        if (name.isEmpty()) return null
+        val startTime = readProcessStartTime(pid) ?: return null
+        return DirectProcessIdentity(name, startTime)
+    }
+
+    private fun readProcessStartTime(pid: Int): Long? {
+        val stat = runCatching { File("/proc/$pid/stat").readText() }.getOrNull() ?: return null
+        // comm 里可能带空格甚至括号，只能从最后一个 ')' 之后开始切：state 是第 3 个字段，
+        // starttime 是第 22 个字段，因此落在切分后的下标 19。
+        val close = stat.lastIndexOf(')')
+        if (close < 0) return null
+        return stat.substring(close + 1).trim().split(Regex("\\s+")).getOrNull(19)?.toLongOrNull()
+    }
 
     private fun writeFreezeStateForPackage(packageName: String, rule: FreezeRule?, targetFrozen: Boolean): FreezeWriteResult {
         if (packageName == SELF_PACKAGE) return FreezeWriteResult(0, emptyList(), "self_package_skipped")
         val context = appContext ?: return FreezeWriteResult(0, emptyList(), "system_context_unavailable")
         val uid = resolvePackageUid(packageName) ?: return FreezeWriteResult(0, emptyList(), "package_uid_unavailable")
+        val targets = rule?.freezeProcesses.orEmpty()
+        writeFreezeDirect(uid, packageName, targets, targetFrozen)?.let { direct ->
+            if (direct.writes > 0) return direct
+        }
         val version = DaemonControlClient.nextVersion()
-        val response = HookDaemonBridge.freeze(context, packageName, uid, targetFrozen, rule?.freezeProcesses.orEmpty(), version, prelaunch = !targetFrozen)
+        val response = HookDaemonBridge.freeze(context, packageName, uid, targetFrozen, targets, version, prelaunch = !targetFrozen)
         val verified = response?.optBoolean("success") == true
         return FreezeWriteResult(if (verified) maxOf(1, response!!.optInt("writes")) else 0,
-            rule?.freezeProcesses.orEmpty(), response?.optString("detail") ?: "daemon_unavailable")
+            targets, response?.optString("detail") ?: "daemon_unavailable")
     }
 
     // system_server 侧真正通知 app 执行冻结/解冻命令的出口在这里。
@@ -2200,6 +2304,21 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
         val context = appContext ?: return false
         val uid = resolvePackageUid(packageName) ?: return false
+        val targets = rule?.freezeProcesses.orEmpty()
+        // 直写优先：不需要 daemon，也不受 daemon 存活影响；失败或不可用才回退异步通道。
+        writeFreezeDirect(uid, packageName, targets, freeze)?.let { direct ->
+            if (direct.writes > 0) {
+                if (freeze) {
+                    frozenPackages.add(packageName)
+                } else {
+                    frozenPackages.remove(packageName)
+                }
+                packageLastCommittedBackground[packageName] = freeze
+                packageLastCommitAt[packageName] = System.currentTimeMillis()
+                logHookDebug("direct ${if (freeze) "冻结" else "解冻"} $packageName ${direct.reason}")
+                return true
+            }
+        }
         val commandId = DaemonControlClient.nextVersion()
         val pending = PendingFreezeCommand(commandId, freeze)
         if (freeze && packagePendingFreezeCommands.putIfAbsent(packageName, pending) != null) return false
@@ -2385,6 +2504,9 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         val freeze: Boolean
     )
 
+    private data class DirectTarget(val pid: Int, val startTime: Long)
+
+    private data class DirectProcessIdentity(val processName: String, val startTime: Long)
 
     data class FreezeWriteResult(
         val writes: Int,
