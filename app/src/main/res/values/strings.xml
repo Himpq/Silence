@@ -181,8 +181,6 @@ CPU: %5$s
     <string name="settings_startup_summary">daemon 始终会在开机和应用更新后自动恢复；这里只控制常驻通知和耗电记录是否也跟着恢复。</string>
     <string name="settings_auto_start_enabled_title">开机自启动</string>
     <string name="settings_auto_start_enabled_summary">启用后在开机、用户解锁和应用更新后自动恢复 Silence 的常驻通知和耗电记录。</string>
-    <string name="settings_daemon_protection_enabled_title">守护 Daemon</string>
-    <string name="settings_daemon_protection_enabled_summary">启用后使用独立前台守护服务维持 Silence 常驻，并在异常退出后尝试自动拉起。</string>
     <string name="settings_power_record_enabled_title">启用耗电记录</string>
     <string name="settings_power_record_enabled_summary">打开后按下面的轮询间隔写入性能记录文件，包含功耗、电量、前台包名和当前性能档位。</string>
     <string name="settings_power_record_poll_hint">耗电记录轮询时间（秒）</string>
@@ -204,10 +202,6 @@ CPU: %5$s
     <string name="notification_title">Silence 状态监控</string>
     <string name="notification_channel_name">状态监控</string>
     <string name="notification_channel_description">持续显示当前前台应用和电池功耗。</string>
-    <string name="daemon_channel_name">守护 Daemon</string>
-    <string name="daemon_channel_description">用于维持 Silence 的守护进程常驻。</string>
-    <string name="daemon_notification_title">Silence 守护中</string>
-    <string name="daemon_notification_summary">保持记录调度与状态链常驻</string>
     <string name="notification_foreground_label">当前前台</string>
     <string name="notification_performance_label">当前档位</string>
     <string name="notification_power_label">当前功耗</string>
@@ -215,7 +209,6 @@ CPU: %5$s
     <string name="notification_power_unknown">功耗未知</string>
     <string name="settings_notification_permission_required">需要通知权限才能开启常驻通知</string>
     <string name="settings_notification_permission_denied">已拒绝通知权限，常驻通知已关闭</string>
-    <string name="settings_daemon_permission_required">守护 Daemon 需要通知权限才能常驻</string>
     <string name="performance_schedule_popup_title">性能调度</string>
     <string name="performance_schedule_popup_message">当前前台：%1$s</string>
     <string name="performance_overlay_subtitle">点击切换当前应用档位，配置会写入存储。</string>

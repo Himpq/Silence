@@ -65,12 +65,6 @@
             android:exported="false" />
 
         <service
-            android:name=".daemon.SilenceDaemonService"
-            android:enabled="true"
-            android:exported="false"
-            android:directBootAware="true" />
-
-        <service
             android:name=".notification.PersistentStatusNotificationService"
             android:enabled="true"
             android:exported="false"

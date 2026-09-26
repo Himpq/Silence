@@ -331,22 +331,6 @@
                     android:text="@string/settings_auto_start_enabled_summary"
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
-
-                <com.google.android.material.materialswitch.MaterialSwitch
-                    android:id="@+id/daemonProtectionSwitch"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:text="@string/settings_daemon_protection_enabled_title"
-                    android:textColor="@color/text_primary" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:text="@string/settings_daemon_protection_enabled_summary"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="13sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

@@ -17,7 +17,6 @@ object SettingsStore {
     private const val KEY_FOREGROUND_DEBUG_LOG_ENABLED = "foreground_debug_log_enabled"
     private const val KEY_PERSISTENT_NOTIFICATION_ENABLED = "persistent_notification_enabled"
     private const val KEY_AUTO_START_ENABLED = "auto_start_enabled"
-    private const val KEY_DAEMON_PROTECTION_ENABLED = "daemon_protection_enabled"
     private const val KEY_POWER_RECORD_ENABLED = "power_record_enabled"
     private const val KEY_PERFORMANCE_SCHEDULE_ENABLED = "performance_schedule_enabled"
     private const val KEY_POWER_RECORD_POLL_INTERVAL_SECONDS = "power_record_poll_interval_seconds"
@@ -178,17 +177,6 @@ object SettingsStore {
         prefs(context)
             .edit()
             .putBoolean(KEY_AUTO_START_ENABLED, enabled)
-            .apply()
-    }
-
-    fun isDaemonProtectionEnabled(context: Context): Boolean {
-        return prefs(context).getBoolean(KEY_DAEMON_PROTECTION_ENABLED, false)
-    }
-
-    fun setDaemonProtectionEnabled(context: Context, enabled: Boolean) {
-        prefs(context)
-            .edit()
-            .putBoolean(KEY_DAEMON_PROTECTION_ENABLED, enabled)
             .apply()
     }
 

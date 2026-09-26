@@ -16,7 +16,6 @@ import androidx.fragment.app.Fragment
 import cn.himpqblog.silence.R
 import cn.himpqblog.silence.config.FreezeListStore
 import cn.himpqblog.silence.daemon.DaemonConfigSynchronizer
-import cn.himpqblog.silence.daemon.SilenceDaemonService
 import cn.himpqblog.silence.databinding.FragmentFeaturesBinding
 import cn.himpqblog.silence.notification.PersistentStatusNotificationService
 import cn.himpqblog.silence.perf.PerformanceExternalModeWriter
@@ -97,7 +96,6 @@ class FeaturesFragment : Fragment() {
         binding.foregroundDebugLogSwitch.isChecked = SettingsStore.isForegroundDebugLogEnabled(context)
         binding.persistentNotificationSwitch.isChecked = SettingsStore.isPersistentNotificationEnabled(context)
         binding.autoStartSwitch.isChecked = SettingsStore.isAutoStartEnabled(context)
-        binding.daemonProtectionSwitch.isChecked = SettingsStore.isDaemonProtectionEnabled(context)
         binding.powerRecordEnabledSwitch.isChecked = SettingsStore.isPowerRecordEnabled(context)
         binding.powerRecordPollIntervalInput.setText(
             SettingsStore.getPowerRecordPollIntervalSeconds(context).toString()
@@ -167,18 +165,6 @@ class FeaturesFragment : Fragment() {
         binding.autoStartSwitch.setOnCheckedChangeListener { _, isChecked ->
             SettingsStore.setAutoStartEnabled(context, isChecked)
         }
-        binding.daemonProtectionSwitch.setOnCheckedChangeListener { _, isChecked ->
-            if (isChecked && !PersistentStatusNotificationService.hasNotificationPermission(context)) {
-                binding.daemonProtectionSwitch.isChecked = false
-                Toast.makeText(context, R.string.settings_daemon_permission_required, Toast.LENGTH_SHORT).show()
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                }
-                return@setOnCheckedChangeListener
-            }
-            SettingsStore.setDaemonProtectionEnabled(context, isChecked)
-            SilenceDaemonService.syncState(context)
-        }
         binding.persistentNotificationSwitch.setOnCheckedChangeListener { _, isChecked ->
             if (suppressPersistentNotificationCallback) {
                 return@setOnCheckedChangeListener
@@ -203,7 +189,6 @@ class FeaturesFragment : Fragment() {
                 return@setOnCheckedChangeListener
             }
             PersistentStatusNotificationService.syncState(context)
-            SilenceDaemonService.syncState(context)
         }
         binding.powerRecordEnabledSwitch.setOnCheckedChangeListener { _, isChecked ->
             val previous = SettingsStore.isPowerRecordEnabled(context)
