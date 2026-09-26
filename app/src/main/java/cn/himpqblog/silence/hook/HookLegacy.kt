@@ -1511,7 +1511,12 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         source: String,
         forceReconcile: Boolean = false
     ) {
-
+        if (packageName == SELF_PACKAGE) {
+            frozenPackages.remove(packageName)
+            packageLastCommittedBackground.remove(packageName)
+            packagePendingFreezeCommands.remove(packageName)
+            return
+        }
         packageLaunchProtectUntil[packageName] = System.currentTimeMillis() + FOREGROUND_RETURN_PROTECT_MS
         packageDesiredBackground[packageName] = false
         val rule = freezeRules[packageName]
@@ -1553,6 +1558,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     private fun thawBeforeActivityStart(packageName: String, source: String) {
+        if (packageName == SELF_PACKAGE) return
         val rule = freezeRules[packageName] ?: return
         val pending = packagePendingFreezeCommands[packageName]
         logHookDebug("启动前解冻检查 package=$packageName source=$source pendingFreeze=${pending?.freeze}")
@@ -2173,6 +2179,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
 
     private fun writeFreezeStateForPackage(packageName: String, rule: FreezeRule?, targetFrozen: Boolean): FreezeWriteResult {
+        if (packageName == SELF_PACKAGE) return FreezeWriteResult(0, emptyList(), "self_package_skipped")
         val context = appContext ?: return FreezeWriteResult(0, emptyList(), "system_context_unavailable")
         val uid = resolvePackageUid(packageName) ?: return FreezeWriteResult(0, emptyList(), "package_uid_unavailable")
         val version = DaemonControlClient.nextVersion()
@@ -2184,7 +2191,13 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     // system_server 侧真正通知 app 执行冻结/解冻命令的出口在这里。
     private fun dispatchFreezeCommandIpc(packageName: String, freeze: Boolean, rule: FreezeRule?, source: String): Boolean {
-
+        // daemon 明确拒绝以自身 uid 为目标，继续下发只会每轮收到 invalid_target_uid，
+        // 还会把 frozenPackages 污染成“自己被冻着”，让这条链一直重试下去。
+        if (packageName == SELF_PACKAGE) {
+            frozenPackages.remove(packageName)
+            packageLastCommittedBackground.remove(packageName)
+            return false
+        }
         val context = appContext ?: return false
         val uid = resolvePackageUid(packageName) ?: return false
         val commandId = DaemonControlClient.nextVersion()
