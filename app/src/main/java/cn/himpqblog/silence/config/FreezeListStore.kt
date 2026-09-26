@@ -232,7 +232,18 @@ object FreezeListStore {
         val result = DaemonControlClient.request(JSONObject().put("command", "SYNC_CONFIG").put("config", config),
             uid = context.applicationInfo.uid, timeoutMs = 3000)
         val success = result?.optBoolean("success") == true
-        Log.i(TAG, "Silence|config|daemon sync success=$success version=${result?.optLong("version", -1)} changed=${result?.optBoolean("changed")} detail=${result?.optString("detail") ?: "daemon_unavailable"}")
+        // priorityMirror 只是 Settings.Global 镜像，失败不影响配置生效，但值得记下来。
+        val mirror = if (result == null || !result.has("priorityMirrorApplied")) {
+            "unknown"
+        } else {
+            "applied=${result.optBoolean("priorityMirrorApplied")} ${result.optString("priorityMirrorDetail")}"
+        }
+        Log.i(
+            TAG,
+            "Silence|config|daemon sync success=$success version=${result?.optLong("version", -1)} " +
+                "changed=${result?.optBoolean("changed")} priorityMirror=$mirror " +
+                "detail=${result?.optString("detail") ?: "daemon_unavailable"}"
+        )
         return success
     }
 

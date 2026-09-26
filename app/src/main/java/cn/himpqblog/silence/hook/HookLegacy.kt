@@ -1705,12 +1705,18 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
             appContext
         } ?: return
         val previousRules = HookDaemonBridge.rules()
+        // oom 优先级规则必须单独比对：只改它而不动冻结规则时，配置通道也要触发重载，
+        // 否则它只能靠 daemon 那次 settings put 的副作用经 ContentObserver 兜进来。
+        val previousPriority = HookDaemonBridge.setting(FreezeListStore.runtimeGlobalProcessPriorityRulesKey())
         val work = HookDaemonBridge.work(context) ?: return
         val updatedRules = HookDaemonBridge.rules()
         if (updatedRules != previousRules) {
             freezeRules = updatedRules?.let { parseFreezeRules(it) }.orEmpty()
-            reloadProcessPriorityRules("daemon-config", requestRecompute = true)
             refreshTopResumedPackage("daemon-config")
+        }
+        val updatedPriority = HookDaemonBridge.setting(FreezeListStore.runtimeGlobalProcessPriorityRulesKey())
+        if (updatedPriority != previousPriority) {
+            reloadProcessPriorityRules("daemon-config", requestRecompute = true)
         }
         val topPackage = currentTopResumedPackage
         if (isHookEnabled() && !topPackage.isNullOrBlank() && work.optString("foregroundPackage") != topPackage) {

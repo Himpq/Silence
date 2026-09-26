@@ -311,7 +311,9 @@ bool write_priority_setting(const std::string& value) {
         execl("/system/bin/settings", "settings", "put", "global", "silence_process_priority_rules_b64", value.c_str(), nullptr);
         _exit(127);
     }
-    int status = 0; const auto deadline = steady_ms() + 1500;
+    // settings 会起一个 binder 事务并落盘，高负载下可能慢，给足时间；这次写入只是给
+    // Settings.Global 观察者用的镜像，失败不再连累整份配置，所以可以耐心等。
+    int status = 0; const auto deadline = steady_ms() + 5000;
     while (steady_ms() < deadline) {
         if (waitpid(pid, &status, WNOHANG) == pid) return WIFEXITED(status) && WEXITSTATUS(status) == 0;
         usleep(10000);
@@ -346,7 +348,11 @@ Json sync_config(const Json& r) {
         if (configuration.has("globals")) previous = configuration.at("globals").at("silence_process_priority_rules_b64").text();
     }
     const std::string priority = next.at("globals").at("silence_process_priority_rules_b64").text();
-    if (priority != previous && !write_priority_setting(priority)) return failure("priority_settings_sync_failed");
+    // 这份镜像只是把 oom 规则同步到 Settings.Global，方便外部观察和触发 hook 侧的观察者。
+    // hook 现在也能从配置通道直接读到优先级规则，所以镜像写失败只记录、不再拒绝整份配置，
+    // 否则一次慢的 settings 调用就会让冻结规则也一起静默失效。
+    bool priority_mirrored = true;
+    if (priority != previous) priority_mirrored = write_priority_setting(priority);
     long long version;
     { std::lock_guard<std::mutex> lock(state_mutex); version = config_version + 1; }
     Json persisted = response("CONFIG"); persisted["version"] = version; persisted["config"] = next;
@@ -355,7 +361,8 @@ Json sync_config(const Json& r) {
         std::lock_guard<std::mutex> lock(state_mutex); configuration = next; config_version = version;
     }
     auto result = response("CONFIG_RESULT"); result["version"] = version; result["changed"] = true;
-
+    result["priorityMirrorApplied"] = priority_mirrored;
+    if (!priority_mirrored) result["priorityMirrorDetail"] = "settings_put_global_failed";
     auto external = apply_configured_external_mode();
     result["externalApplied"] = external.at("success");
     if (external.has("detail")) result["externalDetail"] = external.at("detail");
