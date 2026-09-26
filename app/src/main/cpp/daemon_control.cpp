@@ -164,11 +164,17 @@ Json freeze(const Json& r, int caller) {
     const bool frozen = r.at("freeze").flag();
     const long long version = r.at("version").integer();
     const long long deadline = r.at("deadlineMs").integer();
-    if (version <= 0 || deadline <= 0) return failure("invalid_request_version");
+    if (deadline <= 0) return failure("invalid_request_version");
+    // 客户端版本只用来识别明显异常的值，不再参与排序。daemon 侧本来就按 uid 持锁串行执行，
+    // hook 侧也用 pending 表保证同一个包只有一条命令在途，因此不需要 last_version 做硬性拒绝：
+    // 任何客户端都能把 version 顶到未来，从而把这个 uid 永久锁死成 stale_request，直到 daemon
+    // 重启才恢复。合法客户端传的是 SystemClock.elapsedRealtimeNanos()，与 steady_ms() 同源，
+    // 只差量纲，所以这里按"不能超出当前时间 60 秒"来兜底。
+    if (version <= 0 || version > steady_ms() * 1000000LL + 60LL * 1000000000LL)
+        return failure("implausible_version");
     auto state = target_state(uid);
     std::lock_guard<std::mutex> target_lock(state->mutex);
     if (steady_ms() > deadline) return failure("request_expired");
-    if (version <= state->last_version) return failure("stale_request");
     state->last_version = version;
     // Only a genuine pre-launch thaw re-arms the launch guard, and it never extends a
     // window that is already open. A normal thaw must stay side-effect free: the hook
