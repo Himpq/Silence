@@ -22,6 +22,7 @@ import cn.himpqblog.silence.perf.PerformanceExternalModeWriter
 import cn.himpqblog.silence.perf.PerformanceLogStore
 import cn.himpqblog.silence.perf.PerformanceRecordingScheduler
 import cn.himpqblog.silence.settings.SettingsStore
+import cn.himpqblog.silence.settings.VendorAutoStart
 
 class FeaturesFragment : Fragment() {
 
@@ -286,6 +287,25 @@ class FeaturesFragment : Fragment() {
         ) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+
+        binding.autoStartPermissionButton.setOnClickListener {
+            if (!VendorAutoStart.openSettings(requireContext())) {
+                Toast.makeText(requireContext(), R.string.settings_vendor_auto_start_action_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 自启动是系统白名单，用户在设置里改完再回来，这里重新探测一次。
+    override fun onResume() {
+        super.onResume()
+        refreshVendorAutoStartHint()
+    }
+
+    private fun refreshVendorAutoStartHint() {
+        val binding = _binding ?: return
+        val context = context ?: return
+        binding.autoStartPermissionRow.visibility =
+            if (VendorAutoStart.isAutoStartBlocked(context)) View.VISIBLE else View.GONE
     }
 
     // 及时释放 binding，避免设置页反复切换后持有旧视图。

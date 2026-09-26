@@ -181,6 +181,10 @@ CPU: %5$s
     <string name="settings_startup_summary">daemon 始终会在开机和应用更新后自动恢复；这里只控制常驻通知和耗电记录是否也跟着恢复。</string>
     <string name="settings_auto_start_enabled_title">开机自启动</string>
     <string name="settings_auto_start_enabled_summary">启用后在开机、用户解锁和应用更新后自动恢复 Silence 的常驻通知和耗电记录。</string>
+    <string name="settings_vendor_auto_start_title">系统未允许自启动</string>
+    <string name="settings_vendor_auto_start_summary">daemon 负责真正的冻结与解冻，开机后必须由系统拉起才能工作。当前系统的自启动白名单拒绝了 Silence，重启后需要手动打开一次应用。</string>
+    <string name="settings_vendor_auto_start_action">去系统设置开启</string>
+    <string name="settings_vendor_auto_start_action_failed">未找到系统自启动设置页，请手动到应用管理中允许</string>
     <string name="settings_power_record_enabled_title">启用耗电记录</string>
     <string name="settings_power_record_enabled_summary">打开后按下面的轮询间隔写入性能记录文件，包含功耗、电量、前台包名和当前性能档位。</string>
     <string name="settings_power_record_poll_hint">耗电记录轮询时间（秒）</string>

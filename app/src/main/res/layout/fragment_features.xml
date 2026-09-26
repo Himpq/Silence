@@ -316,6 +316,41 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
 
+                <LinearLayout
+                    android:id="@+id/autoStartPermissionRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@color/surface_card"
+                    android:orientation="vertical"
+                    android:padding="12dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_vendor_auto_start_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/settings_vendor_auto_start_summary"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/autoStartPermissionButton"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="@string/settings_vendor_auto_start_action" />
+                </LinearLayout>
+
                 <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/autoStartSwitch"
                     android:layout_width="match_parent"
