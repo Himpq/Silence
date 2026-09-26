@@ -10,6 +10,7 @@ import java.util.ArrayDeque
 
 /** system_server owns observation; daemon owns configuration and execution. */
 object HookDaemonBridge {
+    private const val MODULE_PACKAGE = "cn.himpqblog.silence"
     @Volatile private var clientUid = -1
     @Volatile private var configuration: JSONObject? = null
     @Volatile private var configVersion = -1L
@@ -18,10 +19,18 @@ object HookDaemonBridge {
     private fun uid(context: Context): Int {
         if (clientUid >= 10000) return clientUid
         val identity = Binder.clearCallingIdentity()
-        try {
-            return context.packageManager.getApplicationInfo("cn.himpqblog.silence", 0).uid.also { clientUid = it }
+        return try {
+            val manager = context.packageManager ?: return -1
+            val info = manager.getApplicationInfo(MODULE_PACKAGE, 0)
+            info.uid.takeIf { it >= 10000 }?.also { clientUid = it } ?: -1
+        } catch (error: Throwable) {
+            Log.w("Silence", "Silence|hook|module uid unresolved: ${error.javaClass.simpleName}:${error.message}")
+            -1
         } finally { Binder.restoreCallingIdentity(identity) }
     }
+
+    /** 配置没到位时不能把开关当成关闭，否则整条冻结链会静默停摆。 */
+    fun isConfigReady(): Boolean = configuration != null
 
     fun setting(key: String): String = configuration?.optJSONObject("globals")?.optString(key).orEmpty()
     fun rules(): String? = configuration?.optJSONObject("rules")?.toString()

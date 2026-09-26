@@ -54,6 +54,8 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         @Volatile
         private var appContext: Context? = null
         @Volatile
+        private var systemClassLoader: ClassLoader? = null
+        @Volatile
         private var lastAtmsService: Any? = null
         @Volatile
         private var currentTopResumedPackage: String? = null
@@ -135,6 +137,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
         if (lpparam.packageName != TARGET_PACKAGE) {
             return
         }
+        systemClassLoader = lpparam.classLoader
         ensureSystemContext(lpparam.classLoader)
 
         logHookDebug("handleLoadPackage package=${lpparam.packageName} process=${lpparam.processName}")
@@ -1683,7 +1686,12 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     private fun checkForcePollTrigger() {
-        val context = appContext ?: return
+        // system_server 起来早期拿不到 system context，这里必须自己重试，
+        // 否则配置永远拉不下来，开关会被当成关闭，整条冻结链静默停摆。
+        val context = appContext ?: systemClassLoader?.let { loader ->
+            ensureSystemContext(loader)
+            appContext
+        } ?: return
         val previousRules = HookDaemonBridge.rules()
         val work = HookDaemonBridge.work(context) ?: return
         val updatedRules = HookDaemonBridge.rules()
@@ -1814,23 +1822,23 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     private fun readGlobalSetting(key: String): String = HookDaemonBridge.setting(key)
 
-    // 总 Hook 开关只控制逻辑执行，不影响 LSPosed 注入本身。
-    private fun isHookEnabled(): Boolean {
-        val value = readGlobalSetting(FreezeListStore.runtimeGlobalHookEnabledKey()).trim()
-        return value == "1"
+    // 开关语义：配置没送达时按“默认开启”处理，只有明确写成 0/false 才算关闭。
+    // daemon 刚重启或某次请求失败时，配置会短暂为空，这里不能把它当成用户关闭。
+    private fun isSwitchEnabled(key: String): Boolean {
+        if (!HookDaemonBridge.isConfigReady()) return true
+        val value = readGlobalSetting(key).trim()
+        if (value.isEmpty()) return true
+        return value != "0" && !value.equals("false", ignoreCase = true)
     }
+
+    // 总 Hook 开关只控制逻辑执行，不影响 LSPosed 注入本身。
+    private fun isHookEnabled(): Boolean = isSwitchEnabled(FreezeListStore.runtimeGlobalHookEnabledKey())
 
     // 冻结 Hook 开关只影响冻结链，前台跟踪和调控信号可以独立保留。
-    private fun isFreezeHookEnabled(): Boolean {
-        val value = readGlobalSetting(FreezeListStore.runtimeGlobalFreezeHookEnabledKey()).trim()
-        return value == "1"
-    }
+    private fun isFreezeHookEnabled(): Boolean = isSwitchEnabled(FreezeListStore.runtimeGlobalFreezeHookEnabledKey())
 
     // 调控 Hook 开关主要决定是否继续发布前台/亮灭屏等调控信号。
-    private fun isPerformanceHookEnabled(): Boolean {
-        val value = readGlobalSetting(FreezeListStore.runtimeGlobalPerformanceHookEnabledKey()).trim()
-        return value == "1"
-    }
+    private fun isPerformanceHookEnabled(): Boolean = isSwitchEnabled(FreezeListStore.runtimeGlobalPerformanceHookEnabledKey())
 
     private fun isProcessDebugLogEnabled(): Boolean {
         val value = readGlobalSetting(FreezeListStore.runtimeGlobalProcessDebugLogEnabledKey()).trim()
@@ -2382,7 +2390,7 @@ class HookLegacy : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
 
     private fun isPackageInstalled(packageName: String): Boolean {
-        val context = appContext ?: return false
+        val context = appContext ?: return true
         return runCatching {
             context.packageManager.getApplicationInfo(packageName, 0)
             true
